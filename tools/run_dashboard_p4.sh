@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_dashboard_p4.sh - regenerate every escape-reason figure and explorer from the patch-0004
-# runs, in roots mode (fix F1 of 02-Current-Work/Viz-Faithfulness-Audit.md).
+# runs, in roots mode (fix F1 of 02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md).
 #
 # Inputs: /tmp/rv/p4info/<bench>-<cfg> (run_avrora_p4*.sh, run_all_p4.sh) and
 #         /tmp/rv/p4/<prog>-{new,true} (verify_patch4.sh, run_all_p4.sh).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_all_p5.sh - re-analyse all six benchmarks on the patch-0005 build (fix F3 of
-# 02-Current-Work/Viz-Faithfulness-Audit.md) and check each whole run against patch 0004:
+# 02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md) and check each whole run against patch 0004:
 # .res unchanged, .reasons columns 1-4 unchanged, column-5 pointer sets unchanged, own within all.
 set -u
 DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz

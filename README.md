@@ -18,13 +18,13 @@ source under `build/`.
 | `patches/0002-escape-reasons.patch` | the Phase 11 instrumentation: per-object escape reasons in a side map, and `MarkStoreEscaping` on argv[7] |
 | `patches/0003-concrete-return-reason.patch` | `RETURNED` recorded on the concrete returned object, not the synthetic return slot |
 | `patches/0004-successor-pointers.patch` | Phase 13: the successor each propagated reason fired through, as a `GROUP` column plus `<dirname>.via`; `read_reasons` resolves them to causes by default (`HEAPVIZ_REASON_MODE=raw` to disable) |
-| `tools/viz_audit.py` | Phase 14: checks the reason figures against `02-Current-Work/Viz-Faithfulness-Audit.md` (`--mode roots` for figures built on patch 0004) |
+| `tools/viz_audit.py` | Phase 14: checks the reason figures against `02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md` (`--mode roots` for figures built on patch 0004) |
 | `tools/run_all_p4.sh`, `tools/run_dashboard_p4.sh` | Phase 15: re-analyse every benchmark and corpus program on patch 0004, then rebuild every reason figure and explorer in roots mode |
 | `tools/scan_figures.py` | Phase 15: fails if a figure draws a propagated reason or a caption placeholder (reads drawn data, not captions) |
 | `patches/0005-own-vs-inherited.patch` | Phase 16: per object, which reasons fired on it (OWN, column 6) and which its resolver component stamped on it; own successor pointers (column 7) |
 | `tools/verify_patch5.sh`, `tools/run_all_p5.sh`, `tools/compare_reasons_p4_p5.py` | Phase 16: patch 0005 changes nothing but the two new columns (corpus, both configurations; six benchmarks) |
 | `tools/own_witness.py` | Phase 16: an own MONITOR/THROWN/STATIC_FIELD_*/CONSTANT_OBJECT must have its opcode in the object's method |
-| `tools/param_hubs.py`, `tools/run_param_hubs.sh` | Phase 16: allocation sites escaping through a parameter, parameter hubs, hoist candidates (02-Current-Work/Param-Escape-Hubs-Report.md) |
+| `tools/param_hubs.py`, `tools/run_param_hubs.sh` | Phase 16: allocation sites escaping through a parameter, parameter hubs, hoist candidates (02-Current-Work/03-Results/2026-09-14-Param-Escape-Hubs-Report.md) |
 | `tools/run_dashboard_p5.sh` | Phase 16: rebuild every reason figure and explorer with the own/inherited split drawn |
 | `render/figures/*-p5-*` | the current reason figures and explorers. The superseded pre-0004 and pre-0005 sets were removed on 2026-09-21; `tools/run_dashboard_p*.sh` still moves the previous set into a `stale-pre-000N/` folder when re-run |
 | `render/reason_figures.py` | the three escape-reason figures (clusters, multiplicity, single-reason attribution) |

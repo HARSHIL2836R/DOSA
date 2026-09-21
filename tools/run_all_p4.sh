@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_all_p4.sh - re-analyse on the patch-0004 build everything the figures are drawn from (fix F1
-# of 02-Current-Work/Viz-Faithfulness-Audit.md).
+# of 02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md).
 #
 #   benchmarks  xalan luindex fop h2 pmd, MarkStoreEscaping=false (avrora was run by
 #               run_avrora_p4.sh and run_avrora_p4_true.sh)

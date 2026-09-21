@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """viz_audit.py - checks the escape-reason figures against the objectives in
-02-Current-Work/Viz-Faithfulness-Audit.md.
+02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md.
 
     python3 tools/viz_audit.py --info-dir DIR --class-prefix avrora. \
         --figures render/figures/avrora-p3-reason --label avrora

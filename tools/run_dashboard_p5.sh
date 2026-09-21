@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_dashboard_p5.sh - regenerate every escape-reason figure and explorer from the patch-0005
 # runs, in roots mode, with the own/inherited split drawn (fix F3 of
-# 02-Current-Work/Viz-Faithfulness-Audit.md).
+# 02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md).
 #
 # Inputs: /tmp/rv/p5info/<bench>-<cfg> (run_all_p5.sh) and /tmp/rv/p5/<prog>-<cfg>
 #         (verify_patch5.sh).
