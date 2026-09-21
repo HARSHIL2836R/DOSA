@@ -1,0 +1,40 @@
+{
+  "_doc": "Escape-introducing sites that audit_instrumentation.py finds no nearby record() for, but which ARE covered by a mechanism proximity cannot see. Every entry needs a justification that can be re-checked. A site not listed here and not proximate is a real finding.",
+  "sites": [
+    {
+      "file": "handlers/JAssignStmt/NewStmt.java",
+      "line": 53,
+      "why": "PROXIMITY WINDOW ONLY. THREAD_REACHABLE_CLASS is recorded at line 67, 14 lines away, because the reason must be stamped after the ObjectNode exists - on the no-BCI path the object identity changes to the InvalidBCIObjectNode singleton. Genuinely covered."
+    },
+    {
+      "file": "resolver/ReworkedResolver.java",
+      "line": 210,
+      "why": "COPIES AN EXISTING VERDICT. Writes Escape into solvedSummaries only when the incoming state is already Escape, i.e. a handler put it there and recorded a reason against the same (method, object) key. Introduces no new escape."
+    },
+    {
+      "file": "resolver/ReworkedResolver.java",
+      "line": 665,
+      "why": "COVERED BY collectReasons. resolve() short-circuits at the first firing condition; collectReasons is its non-short-circuiting twin and runs immediately before it for the same component, evaluating all four conditions for every member. Attribution is by that pass, not by proximity."
+    },
+    {
+      "file": "resolver/ReworkedResolver.java",
+      "line": 670,
+      "why": "COVERED BY collectReasons - see line 665."
+    },
+    {
+      "file": "resolver/ReworkedResolver.java",
+      "line": 681,
+      "why": "COVERED BY collectReasons - see line 665."
+    },
+    {
+      "file": "resolver/ReworkedResolver.java",
+      "line": 703,
+      "why": "COVERED BY collectReasons - see line 665."
+    },
+    {
+      "file": "resolver/SummaryResolver.java",
+      "line": 86,
+      "why": "DEAD ON THIS PATH. Main.java sets useNewResolver = true unconditionally, and printReasons is only called in the ReworkedResolver branch, so no run that produces a .reasons file reaches SummaryResolver at all."
+    }
+  ]
+}
