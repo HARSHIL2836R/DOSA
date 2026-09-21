@@ -1,0 +1,11 @@
+# build products and analysis output — regenerable via the Makefile
+build/
+out/
+*.class
+
+# rendered figures are deliverables and ARE committed:
+#   render/figures/*.svg, *.png
+
+# Python bytecode
+__pycache__/
+*.pyc
