@@ -26,7 +26,7 @@ source under `build/`.
 | `tools/own_witness.py` | Phase 16: an own MONITOR/THROWN/STATIC_FIELD_*/CONSTANT_OBJECT must have its opcode in the object's method |
 | `tools/param_hubs.py`, `tools/run_param_hubs.sh` | Phase 16: allocation sites escaping through a parameter, parameter hubs, hoist candidates (02-Current-Work/Param-Escape-Hubs-Report.md) |
 | `tools/run_dashboard_p5.sh` | Phase 16: rebuild every reason figure and explorer with the own/inherited split drawn |
-| `render/figures/*-p5-*` | the current reason figures and explorers; `stale-pre-0005/` and `stale-pre-0004/` hold the superseded ones |
+| `render/figures/*-p5-*` | the current reason figures and explorers. The superseded pre-0004 and pre-0005 sets were removed on 2026-09-21; `tools/run_dashboard_p*.sh` still moves the previous set into a `stale-pre-000N/` folder when re-run |
 | `render/reason_figures.py` | the three escape-reason figures (clusters, multiplicity, single-reason attribution) |
 | `build/` | throwaway: compiled corpus classes, compiled Stava classes, run output |
 | `Makefile` | `make E01` = compile, analyse, extract, render one program |
