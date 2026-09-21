@@ -1,0 +1,370 @@
+Subject: [PATCH 4/4] reasons: record the successor a propagated reason fired through
+
+APPLIES ON TOP OF 0003-concrete-return-reason.patch. Three files:
+
+  es/EscapeReasons           Via(method, ObjectNode), and per-component pointer groups.
+  resolver/ReworkedResolver  collectReasons records the successor on every propagated firing;
+                             stampComponent stores them once per component.
+  main/Main                  printReasons writes a GROUP column and <dirname>.via.
+
+WHY
+---
+TRANSITIVE_SUCCESSOR and PARAM_ESCAPES_VIA_SUCCESSOR are not causes. Each means "a successor
+already escapes", and the cause is whatever made that successor escape. Counting them as
+reasons double-counts: one cause is counted on the object where it fired and again, as
+TRANSITIVE_SUCCESSOR, on every object upstream of it. It also names no fix, yet on
+avrora (application objects, MarkStoreEscaping=false, patch 0003) TRANSITIVE_SUCCESSOR is the
+second-largest single-reason bucket, 504 objects.
+
+They cannot simply be dropped. For those 504 objects it is the only reason recorded, and
+removing it would break the invariant that Escape implies a non-empty reason set. They must be
+REPLACED by the causes they point to, and the enum alone cannot say where it points.
+
+WHY RECORD THE POINTER HERE AND NOT REBUILD IT FROM .info
+--------------------------------------------------------
+At collectReasons the successor `nxt` is in hand at the moment the reason fires. The .info
+dependency edge is not a reliable substitute: on avrora 7,726 of 18,571 internal objects
+carrying TRANSITIVE_SUCCESSOR (41.6 %) have no out-edge at all (tools/orphan_transitive.py),
+because purge() deletes the conditional value, and the edge with it, once an object escapes.
+
+WHAT IS RECORDED
+----------------
+  * TRANSITIVE_SUCCESSOR: every successor for which isEscapingObject(nxt) held, after the same
+    isReturnedFromDifferentFunction skip resolve() applies.
+  * PARAM_ESCAPES_VIA_SUCCESSOR: isEscapingParam() is still what decides the reason. When it
+    fires, the same loop (skip isReturnObject, test isEscapingObject) is re-run to name every
+    successor it would have accepted, since isEscapingParam stops at the first.
+  * The pointers are stamped component-wide, like the reasons, but stored ONCE per component
+    as a group; each member holds only the group index. A pointer to a member of the same
+    component is dropped, since the component already carries that member's causes.
+
+  The first version copied the pointer union onto every member. avrora died with
+  OutOfMemoryError in printReasons: the JDK half has components large enough that
+  |component| x |pointers| strings do not fit in 10 GB. The verdict was unaffected (.res
+  written, 0 multiset diffs); only the reason output was lost.
+
+OUTPUT
+------
+  .reasons  gains a fifth column GROUP: an integer, or empty when no pointer was recorded.
+            Columns 1-4 are byte-identical to patch 0003's.
+  .via      new, one line per group:  <group> TAB <method>|<bci>|<objectType>;...
+            The pointer field is EMPTY for a group whose propagated reason fired only inside
+            its own component. Groups are numbered by first appearance in the sorted .reasons,
+            so both files are deterministic. `|` and `;` cannot occur in a Soot signature.
+
+The extractor (extract/info_to_graph.py, read_reasons mode "roots") follows object -> group ->
+successor over the SCC condensation and replaces the two propagated reasons with the union of
+NEAREST causes: each chain stops at the first object with a cause of its own (following every
+pointer to the end merged large components into one blob; Micro-Corpus-Log F13.3). A chain
+that cannot be followed becomes one of three
+synthetic constants, SUCCESSOR_UNRECORDED / SUCCESSOR_NOT_IN_REASONS / SUCCESSOR_WITHOUT_CAUSE,
+counted with the surrender reasons, so the invariant still holds.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+No EscapeStatus is read beyond what collectReasons already read; nothing is written except the
+append-only side maps, which the analysis never reads. The check is tools/verify_patch4.sh:
+the .res line multiset and .reasons columns 1-4 must be identical to patch 0003's on every
+corpus program.
+
+MEASURED (Micro-Corpus-Log Phase 13)
+------------------------------------
+  corpus, 13 programs: .res 0 diffs, .reasons columns 1-4 0 diffs.
+  avrora whole run: .res 0 diffs, columns 1-4 0 diffs, 48,097 groups.
+  avrora application objects: TRANSITIVE_SUCCESSOR single-reason 504 -> 0; of 2,792 objects
+  with a propagated and a direct reason, 1,598 resolve to exactly their direct reasons.
+  Remaining gap: every SUCCESSOR_WITHOUT_CAUSE (17,551 objects) is in ONE resolver component of
+  7,994 methods -- component-wide stamping (X-A4), not this patch.
+
+diff -ruN a/src/es/EscapeReasons.java b/src/es/EscapeReasons.java
+--- a/src/es/EscapeReasons.java	2026-09-13 22:06:14.812581900 +0530
++++ b/src/es/EscapeReasons.java	2026-09-13 22:06:14.884576100 +0530
+@@ -4,7 +4,10 @@
+ import soot.SootMethod;
+ 
+ import java.util.EnumSet;
++import java.util.HashSet;
+ import java.util.Map;
++import java.util.Objects;
++import java.util.Set;
+ import java.util.concurrent.ConcurrentHashMap;
+ 
+ /*
+@@ -71,4 +74,87 @@
+ 			return s == null ? EnumSet.noneOf(EscapeReason.class) : EnumSet.copyOf(s);
+ 		}
+ 	}
++
++	/*
++	 * via — the successor a PROPAGATED reason fired through.
++	 *
++	 * TRANSITIVE_SUCCESSOR and PARAM_ESCAPES_VIA_SUCCESSOR are not causes. Each says "a
++	 * successor already escapes", and the cause is whatever made that successor escape. The
++	 * enum alone cannot name it, so every firing also records the successor here, as the
++	 * (method, ObjectNode) pair the analysis keys it by. The extractor follows these pointers
++	 * and replaces the propagated reason with the causes at the end of the chain.
++	 *
++	 * Recorded at the moment the reason fires, not rebuilt from .info afterwards, because the
++	 * .info dependency edge is not reliable: on avrora 41.6 % of internal objects carrying
++	 * TRANSITIVE_SUCCESSOR have no out-edge at all (tools/orphan_transitive.py).
++	 *
++	 * ONE SET PER COMPONENT, NOT PER OBJECT. The pointers are stamped component-wide like the
++	 * reasons, and copying the union onto every member is |component| x |pointers|: the first
++	 * avrora run of this patch died of OutOfMemoryError writing exactly that. So a component's
++	 * pointers are stored once as a group, each member holds only the group's index, and
++	 * printReasons writes the groups once, to <dirname>.via.
++	 *
++	 * A group can be EMPTY: the propagated reason fired, but only through a successor in the
++	 * same component, whose causes the component already carries. That is different from "no
++	 * group", which means no pointer was recorded at all.
++	 *
++	 * Same discipline as the reason map: append-only, never read by the analysis.
++	 */
++	public static final Map<SootMethod, Map<ObjectNode, Integer>> viaGroupOf = new ConcurrentHashMap<>();
++	public static final java.util.List<Set<Via>> viaGroups = new java.util.ArrayList<>();
++
++	public static final class Via {
++		public final SootMethod method;
++		public final ObjectNode obj;
++
++		public Via(SootMethod method, ObjectNode obj) {
++			this.method = method;
++			this.obj = obj;
++		}
++
++		@Override
++		public boolean equals(Object o) {
++			if (!(o instanceof Via)) return false;
++			Via v = (Via) o;
++			return method == v.method && obj.equals(v.obj);
++		}
++
++		@Override
++		public int hashCode() {
++			return Objects.hash(System.identityHashCode(method), obj);
++		}
++
++		/** method|ref|type — `|` and `;` cannot occur in a Soot method signature. */
++		@Override
++		public String toString() {
++			return method + "|" + obj.ref + "|" + obj.type;
++		}
++	}
++
++	/** Store one component's pointer set; returns the index members are assigned. */
++	public static synchronized int newViaGroup(Set<Via> vs) {
++		viaGroups.add(new HashSet<>(vs));
++		return viaGroups.size() - 1;
++	}
++
++	/** Point one object at a group. An object already in a group has the new set merged in. */
++	public static synchronized void assignViaGroup(SootMethod m, ObjectNode obj, int g) {
++		if (m == null || obj == null) return;
++		Map<ObjectNode, Integer> mm = viaGroupOf.computeIfAbsent(m, k -> new ConcurrentHashMap<>());
++		Integer old = mm.get(obj);
++		if (old == null) mm.put(obj, g);
++		else if (old != g) viaGroups.get(old).addAll(viaGroups.get(g));
++	}
++
++	/** -1 when the object has no group. */
++	public static synchronized int getViaGroup(SootMethod m, ObjectNode obj) {
++		Map<ObjectNode, Integer> mm = viaGroupOf.get(m);
++		Integer g = (mm == null) ? null : mm.get(obj);
++		return g == null ? -1 : g;
++	}
++
++	public static synchronized Set<Via> getVia(SootMethod m, ObjectNode obj) {
++		int g = getViaGroup(m, obj);
++		return g < 0 ? new HashSet<>() : new HashSet<>(viaGroups.get(g));
++	}
+ }
+diff -ruN a/src/main/Main.java b/src/main/Main.java
+--- a/src/main/Main.java	2026-09-13 22:06:14.821857000 +0530
++++ b/src/main/Main.java	2026-09-13 22:06:14.890645700 +0530
+@@ -306,9 +306,20 @@
+ 	/*
+ 	 * printReasons — <dirname>.reasons, one line per abstract object:
+ 	 *
+-	 *     <method signature>	<bci>	<objectType>	REASON,REASON,REASON
++	 *     <method signature>	<bci>	<objectType>	REASON,REASON,REASON	GROUP
+ 	 *
+-	 * Objects with no reason are emitted with an EMPTY last field, so the zero bucket of the
++	 * GROUP (patch 0004) is the index of the object's successor-pointer group in
++	 * <dirname>.via, or empty when no pointer was recorded. .via has one line per group:
++	 *
++	 *     <group>	<method signature>|<bci>|<objectType>;...
++	 *
++	 * each pointer joining onto the first three columns of a .reasons line; the pointer field is
++	 * empty for a group whose propagated reason fired only inside its own component. Groups are
++	 * numbered by first appearance in the sorted .reasons, so both files are deterministic.
++	 * Groups are not inlined per object because components are stamped as a whole, and
++	 * repeating a component's pointers on every member ran avrora out of memory.
++	 *
++	 * Objects with no reason are emitted with an EMPTY reason field, so the zero bucket of the
+ 	 * multiplicity histogram is a measured value and not an inference from absence. That is
+ 	 * why this iterates the resolved summaries rather than the side map: the side map only
+ 	 * knows about objects something happened to.
+@@ -322,8 +333,10 @@
+ 							 String ipDir, String opDir) {
+ 		Path p_ipDir = Paths.get(ipDir);
+ 		Path p_opFile = Paths.get(opDir + "/" + p_ipDir.getFileName() + ".reasons");
++		Path p_viaFile = Paths.get(opDir + "/" + p_ipDir.getFileName() + ".via");
+ 
+-		List<String> lines = new ArrayList<>();
++		// {line without GROUP, raw group index or null}
++		List<String[]> lines = new ArrayList<>();
+ 		int objects = 0, withReason = 0;
+ 		for (SootMethod method : ptgs.keySet()) {
+ 			HashMap<ObjectNode, EscapeStatus> summary = resolved.get(method);
+@@ -337,23 +350,48 @@
+ 					sb.append(r.name());
+ 					first = false;
+ 				}
+-				lines.add(method.toString() + "\t" + obj.ref + "\t" + obj.type.toString()
+-						+ "\t" + sb.toString());
++				int g = EscapeReasons.getViaGroup(method, obj);
++				lines.add(new String[] {
++						method.toString() + "\t" + obj.ref + "\t" + obj.type.toString() + "\t" + sb,
++						g < 0 ? null : Integer.toString(g) });
+ 				objects++;
+ 				if (!rs.isEmpty()) withReason++;
+ 			}
+ 		}
+-		Collections.sort(lines);
++		lines.sort((a, b) -> a[0].compareTo(b[0]));
+ 
+-		StringBuilder out = new StringBuilder();
+-		for (String l : lines) out.append(l).append("\n");
+-		try {
+-			System.out.println("Trying to write to:" + p_opFile);
+-			Files.write(p_opFile, out.toString().getBytes(StandardCharsets.UTF_8),
+-					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+-					StandardOpenOption.WRITE);
++		Map<String, Integer> renumber = new HashMap<>();
++		try (java.io.BufferedWriter reasonsOut = Files.newBufferedWriter(p_opFile, StandardCharsets.UTF_8);
++			 java.io.BufferedWriter viaOut = Files.newBufferedWriter(p_viaFile, StandardCharsets.UTF_8)) {
++			System.out.println("Trying to write to:" + p_opFile + " and " + p_viaFile);
++			for (String[] l : lines) {
++				String group = "";
++				if (l[1] != null) {
++					Integer n = renumber.get(l[1]);
++					if (n == null) {
++						n = renumber.size();
++						renumber.put(l[1], n);
++						List<String> ptrs = new ArrayList<>();
++						for (EscapeReasons.Via v : EscapeReasons.viaGroups.get(Integer.parseInt(l[1])))
++							ptrs.add(v.toString());
++						Collections.sort(ptrs);
++						viaOut.write(n + "\t");
++						for (int i = 0; i < ptrs.size(); i++) {
++							if (i > 0) viaOut.write(";");
++							viaOut.write(ptrs.get(i));
++						}
++						viaOut.write("\n");
++					}
++					group = Integer.toString(n);
++				}
++				reasonsOut.write(l[0]);
++				reasonsOut.write("\t");
++				reasonsOut.write(group);
++				reasonsOut.write("\n");
++			}
+ 			System.out.println("Reasons have been written: " + objects + " objects, "
+-					+ withReason + " with at least one reason, "
++					+ withReason + " with at least one reason, " + renumber.size()
++					+ " successor-pointer groups, "
+ 					+ EscapeReasons.nullMethodDrops.get() + " attributions dropped for a null method.");
+ 		} catch (IOException e) {
+ 			System.out.println("There is an exception" + e);
+diff -ruN a/src/resolver/ReworkedResolver.java b/src/resolver/ReworkedResolver.java
+--- a/src/resolver/ReworkedResolver.java	2026-09-13 22:06:14.819088600 +0530
++++ b/src/resolver/ReworkedResolver.java	2026-09-13 22:06:14.887613000 +0530
+@@ -736,11 +736,27 @@
+      * for that to matter. The result is identical either way, because every stamp goes to
+      * every member and the side map is a set.
+      */
+-    private void stampComponent(List<StandardObject> component, EnumSet<EscapeReason> rs) {
++    private void stampComponent(List<StandardObject> component, EnumSet<EscapeReason> rs,
++                                Set<EscapeReasons.Via> via) {
+         if (rs.isEmpty()) return;
+         for (StandardObject s : component)
+             for (EscapeReason r : rs)
+                 EscapeReasons.record(s.getMethod(), s.getObject(), r);
++
++        // The successor pointers travel with the propagated reasons they explain, stored once
++        // for the component (see EscapeReasons.viaGroups). A pointer to a member of this same
++        // component is dropped: the component already carries that member's causes.
++        if (!rs.contains(EscapeReason.TRANSITIVE_SUCCESSOR)
++                && !rs.contains(EscapeReason.PARAM_ESCAPES_VIA_SUCCESSOR))
++            return;
++        Set<EscapeReasons.Via> members = new HashSet<>();
++        for (StandardObject s : component)
++            members.add(new EscapeReasons.Via(s.getMethod(), s.getObject()));
++        Set<EscapeReasons.Via> external = new HashSet<>(via);
++        external.removeAll(members);
++        int g = EscapeReasons.newViaGroup(external);
++        for (StandardObject s : component)
++            EscapeReasons.assignViaGroup(s.getMethod(), s.getObject(), g);
+     }
+ 
+     /*
+@@ -768,6 +784,8 @@
+      */
+     void collectReasons(List<StandardObject> component) {
+         EnumSet<EscapeReason> fired = EnumSet.noneOf(EscapeReason.class);
++        // patch 0004: which successor each propagated reason fired through
++        Set<EscapeReasons.Via> via = new HashSet<>();
+ 
+         for (StandardObject sobj : component) {
+ 
+@@ -779,16 +797,27 @@
+ 
+             HashMap<ObjectNode, EscapeStatus> ess = this.solvedSummaries.get(sobj.getMethod());
+             EscapeStatus sobjEs = (ess == null) ? null : ess.get(sobj.getObject());
+-            if (sobjEs != null && sobjEs.doesEscape())
++            if (sobjEs != null && sobjEs.doesEscape()) {
+                 fired.addAll(EscapeReasons.get(sobj.getMethod(), sobj.getObject()));
++                via.addAll(EscapeReasons.getVia(sobj.getMethod(), sobj.getObject()));
++            }
+ 
+             if (isAssignedToThis(sobj))
+                 fired.add(EscapeReason.ASSIGNED_TO_THIS_OR_PARAM);
+ 
+             if (StoreEscape.MarkParamReturnEscaping == false
+                     && sobj.getObject().type == ObjectType.parameter) {
+-                if (isEscapingParam(sobj))
++                if (isEscapingParam(sobj)) {
+                     fired.add(EscapeReason.PARAM_ESCAPES_VIA_SUCCESSOR);
++                    // isEscapingParam() stops at the first hit; name every successor it
++                    // would have accepted, with the same skip
++                    for (StandardObject nxt : this.graph.get(sobj)) {
++                        if (isReturnObject(nxt))
++                            continue;
++                        if (isEscapingObject(nxt))
++                            via.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
++                    }
++                }
+                 // resolve() continues here too, so the successor scan below is not reached
+                 continue;
+             }
+@@ -801,8 +830,10 @@
+                     if (StoreEscape.MarkParamReturnEscaping == false
+                             && isReturnedFromDifferentFunction(sobj, nxt))
+                         continue;
+-                    if (isEscapingObject(nxt))
++                    if (isEscapingObject(nxt)) {
+                         fired.add(EscapeReason.TRANSITIVE_SUCCESSOR);
++                        via.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
++                    }
+                 }
+                 catch (Exception e) {
+                     // same swallow as resolve(), for the same reason: a missing summary
+@@ -810,7 +841,7 @@
+             }
+         }
+ 
+-        stampComponent(component, fired);
++        stampComponent(component, fired, via);
+     }
+ 
+     void SetComponent ( List<StandardObject> comp, EscapeState es) {

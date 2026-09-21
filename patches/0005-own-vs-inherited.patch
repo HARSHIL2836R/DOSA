@@ -1,0 +1,426 @@
+Subject: [PATCH 5/5] reasons: record which reasons fired on the object and which it inherited
+
+APPLIES ON TOP OF 0004-successor-pointers.patch. Three files:
+
+  es/EscapeReasons           an `own` side map; record() writes both maps, a new inherit() writes
+                             only the union; own successor-pointer groups, interned.
+  resolver/ReworkedResolver  collectReasons keeps, per member, what fired on that member;
+                             stampComponent records those as own and the rest as inherited.
+  main/Main                  printReasons writes two more columns, OWN and OWNGROUP.
+
+WHY
+---
+resolve() escapes a whole resolver component when any member satisfies a condition, and
+collectReasons mirrors it by stamping the component's reason union on every member
+(Reason-Pipeline-Spec F-A5 / X-A4). The verdict needs that; the figures do not. A reason that fired
+on one member is drawn as a reason of all of them, so a component of N members with k reasons
+appears as N objects with k reasons each. On avrora under MarkStoreEscaping=false one component
+holds 17,551 objects; 819 of 827 application objects carrying MONITOR have no monitorenter in
+their method at all (Viz-Faithfulness-Audit 4.2).
+
+The loop already knows which member each condition fired on. The union EnumSet threw that away.
+This keeps it.
+
+WHAT IS OWN
+-----------
+A reason is an object's own if it was recorded at a site that examined THAT object:
+  * every handler site, the intraprocedural cascade, KillCallerOnly, stampReturned (all through
+    record(), unchanged);
+  * in collectReasons, the conditions evaluated on this member: RETURNED, NO_BCI_METHOD_AT_RESOLVER,
+    ASSIGNED_TO_THIS_OR_PARAM, PARAM_ESCAPES_VIA_SUCCESSOR, TRANSITIVE_SUCCESSOR, and the reasons
+    the member had already recorded itself before resolution reached it (getOwn, not get).
+Everything else stampComponent puts on the member is inherited: EscapeReasons.inherit() adds it to
+the union map and not to `own`. The union map, and so .reasons columns 1-4, are unchanged.
+
+Own successor pointers are the successors this member's own propagated reasons fired through.
+Unlike the component's union group they keep pointers to siblings, because a sibling that had
+already escaped is a real cause for this member. They share viaGroups (one .via, one numbering);
+identical sets are interned.
+
+An own reason may still have reached the object intraprocedurally through a container
+(recursiveCascadeEscape). This patch separates the resolver component only.
+
+"INHERITED" IS NOT "WRONG"
+--------------------------
+An inherited reason is true for the verdict: Stava resolves the component jointly, and some
+members escape only through the component. corpus/M02: `Item j` really escapes (b.item = j, then
+publish(b)), but only through its component, so its reason is inherited. `Box a` never escapes in
+the source and also carries only an inherited reason, through context-insensitive merging. The
+split cannot tell those two apart; it says where the reason fired, not whether it is spurious.
+
+OUTPUT
+------
+  .reasons  columns 6 and 7: OWN (comma list, a subset of column 4) and OWNGROUP (an index into
+            .via, or empty). Columns 1-4 byte-identical to patch 0004. Column 5 names the same
+            pointer set per object; its numbers can shift, because own groups take numbers in the
+            same first-appearance sequence.
+
+The extractor (extract/info_to_graph.py) returns the split as ReasonMap.own and joins it as
+ownReasons / inheritedReasons. In roots mode an object's own propagated reasons resolve through
+its own pointers; a pointer to a sibling resolves to the sibling's own direct reasons, not to the
+component union, which would hand the union back as own.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+No EscapeStatus is read that collectReasons did not already read; the union `fired` is computed
+exactly as before. The check is tools/verify_patch5.sh (corpus, both configurations) and
+tools/run_all_p5.sh (six benchmarks): .res line multiset identical to patch 0004, .reasons columns
+1-4 identical, column-5 pointer sets identical, own within all on every line
+(tools/compare_reasons_p4_p5.py). tools/own_witness.py checks the split against the bytecode.
+
+diff -ruN a/src/es/EscapeReasons.java b/src/es/EscapeReasons.java
+--- a/src/es/EscapeReasons.java	2026-09-14 19:46:15.661963100 +0530
++++ b/src/es/EscapeReasons.java	2026-09-14 19:46:15.800885300 +0530
+@@ -34,13 +34,51 @@
+ 		return reasons.computeIfAbsent(m, k -> new ConcurrentHashMap<>());
+ 	}
+ 
+-	/** Stamp one reason onto one object. Silently ignores a null method: see note in seen(). */
++	/*
++	 * own — the reasons that fired ON this object (patch 0005).
++	 *
++	 * `reasons` is what the object carries after resolution, including the union a resolver
++	 * component stamps on every member (ReworkedResolver.stampComponent, Reason-Pipeline-Spec
++	 * X-A4). `own` is the subset recorded at a site that examined this object itself: every
++	 * handler site, the intraprocedural cascade, KillCallerOnly, stampReturned, and the resolver
++	 * conditions evaluated on this member. inherited = reasons - own.
++	 *
++	 * An own reason can still have been reached intraprocedurally through a container
++	 * (PointsToGraph.recursiveCascadeEscape stamps the contents of an escaping object); this map
++	 * separates the resolver component only.
++	 */
++	public static final Map<SootMethod, Map<ObjectNode, EnumSet<EscapeReason>>> own =
++			new ConcurrentHashMap<>();
++
++	/** Stamp one reason onto one object, as its own. Silently ignores a null method: see seen(). */
+ 	public static void record(SootMethod m, ObjectNode obj, EscapeReason r) {
+ 		if (m == null || obj == null || r == null) return;
+ 		Map<ObjectNode, EnumSet<EscapeReason>> mm = forMethod(m);
+ 		synchronized (mm) {
+ 			mm.computeIfAbsent(obj, k -> EnumSet.noneOf(EscapeReason.class)).add(r);
+ 		}
++		Map<ObjectNode, EnumSet<EscapeReason>> om = own.computeIfAbsent(m, k -> new ConcurrentHashMap<>());
++		synchronized (om) {
++			om.computeIfAbsent(obj, k -> EnumSet.noneOf(EscapeReason.class)).add(r);
++		}
++	}
++
++	/** Stamp one reason onto one object WITHOUT making it the object's own: component inheritance. */
++	public static void inherit(SootMethod m, ObjectNode obj, EscapeReason r) {
++		if (m == null || obj == null || r == null) return;
++		Map<ObjectNode, EnumSet<EscapeReason>> mm = forMethod(m);
++		synchronized (mm) {
++			mm.computeIfAbsent(obj, k -> EnumSet.noneOf(EscapeReason.class)).add(r);
++		}
++	}
++
++	public static EnumSet<EscapeReason> getOwn(SootMethod m, ObjectNode obj) {
++		Map<ObjectNode, EnumSet<EscapeReason>> om = own.get(m);
++		if (om == null) return EnumSet.noneOf(EscapeReason.class);
++		synchronized (om) {
++			EnumSet<EscapeReason> s = om.get(obj);
++			return s == null ? EnumSet.noneOf(EscapeReason.class) : EnumSet.copyOf(s);
++		}
+ 	}
+ 
+ 	/**
+@@ -157,4 +195,37 @@
+ 		int g = getViaGroup(m, obj);
+ 		return g < 0 ? new HashSet<>() : new HashSet<>(viaGroups.get(g));
+ 	}
++
++	/*
++	 * Own pointers (patch 0005): the successors a propagated reason fired through ON THIS
++	 * member, as opposed to the component's union above. Unlike the union group they keep
++	 * pointers to siblings in the same component, because a sibling that already escaped is a
++	 * real cause for this member. They live in the same viaGroups list, so one .via file and one
++	 * numbering serve both; identical sets are interned to one index. Own groups are never
++	 * merged, so interning a copy as the key is safe.
++	 */
++	public static final Map<SootMethod, Map<ObjectNode, Integer>> ownViaGroupOf = new ConcurrentHashMap<>();
++	private static final Map<Set<Via>, Integer> ownIntern = new java.util.HashMap<>();
++
++	public static synchronized void assignOwnVia(SootMethod m, ObjectNode obj, Set<Via> vs) {
++		if (m == null || obj == null || vs == null || vs.isEmpty()) return;
++		Map<ObjectNode, Integer> mm = ownViaGroupOf.computeIfAbsent(m, k -> new ConcurrentHashMap<>());
++		Integer old = mm.get(obj);
++		Set<Via> key = new HashSet<>(vs);
++		if (old != null) key.addAll(viaGroups.get(old));
++		key = java.util.Collections.unmodifiableSet(key);
++		Integer g = ownIntern.get(key);
++		if (g == null) {
++			g = newViaGroup(key);
++			ownIntern.put(key, g);
++		}
++		mm.put(obj, g);
++	}
++
++	/** -1 when the object has no own pointers. */
++	public static synchronized int getOwnViaGroup(SootMethod m, ObjectNode obj) {
++		Map<ObjectNode, Integer> mm = ownViaGroupOf.get(m);
++		Integer g = (mm == null) ? null : mm.get(obj);
++		return g == null ? -1 : g;
++	}
+ }
+diff -ruN a/src/main/Main.java b/src/main/Main.java
+--- a/src/main/Main.java	2026-09-14 19:46:15.666489100 +0530
++++ b/src/main/Main.java	2026-09-14 19:46:15.818401300 +0530
+@@ -319,6 +319,12 @@
+ 	 * Groups are not inlined per object because components are stamped as a whole, and
+ 	 * repeating a component's pointers on every member ran avrora out of memory.
+ 	 *
++	 * Patch 0005 appends two more columns, so a line is REASONS, GROUP, OWN, OWNGROUP: OWN is the
++	 * subset of REASONS that fired on this object itself (the rest was stamped on it by its
++	 * resolver component), and OWNGROUP indexes, in the same .via numbering, the successors its
++	 * own propagated reasons fired through. Columns 1-5 are unchanged in content; the group
++	 * numbers in column 5 can shift, because own groups take numbers in the same sequence.
++	 *
+ 	 * Objects with no reason are emitted with an EMPTY reason field, so the zero bucket of the
+ 	 * multiplicity histogram is a measured value and not an inference from absence. That is
+ 	 * why this iterates the resolved summaries rather than the side map: the side map only
+@@ -335,27 +341,29 @@
+ 		Path p_opFile = Paths.get(opDir + "/" + p_ipDir.getFileName() + ".reasons");
+ 		Path p_viaFile = Paths.get(opDir + "/" + p_ipDir.getFileName() + ".via");
+ 
+-		// {line without GROUP, raw group index or null}
++		// {columns 1-4, raw group index or null, own reasons, raw own group index or null}
+ 		List<String[]> lines = new ArrayList<>();
+-		int objects = 0, withReason = 0;
++		int objects = 0, withReason = 0, withInherited = 0;
+ 		for (SootMethod method : ptgs.keySet()) {
+ 			HashMap<ObjectNode, EscapeStatus> summary = resolved.get(method);
+ 			if (summary == null) continue;
+ 			for (ObjectNode obj : summary.keySet()) {
+ 				EnumSet<EscapeReason> rs = EscapeReasons.get(method, obj);
+-				StringBuilder sb = new StringBuilder();
+-				boolean first = true;
+-				for (EscapeReason r : rs) {          // EnumSet iterates in declaration order
+-					if (!first) sb.append(",");
+-					sb.append(r.name());
+-					first = false;
+-				}
++				// record() writes both maps, so own is a subset of rs by construction; the
++				// intersection only guards the column contract (column 6 within column 4)
++				EnumSet<EscapeReason> mine = EscapeReasons.getOwn(method, obj);
++				mine.retainAll(rs);
+ 				int g = EscapeReasons.getViaGroup(method, obj);
++				int og = EscapeReasons.getOwnViaGroup(method, obj);
+ 				lines.add(new String[] {
+-						method.toString() + "\t" + obj.ref + "\t" + obj.type.toString() + "\t" + sb,
+-						g < 0 ? null : Integer.toString(g) });
++						method.toString() + "\t" + obj.ref + "\t" + obj.type.toString() + "\t"
++								+ reasonList(rs),
++						g < 0 ? null : Integer.toString(g),
++						reasonList(mine),
++						og < 0 ? null : Integer.toString(og) });
+ 				objects++;
+ 				if (!rs.isEmpty()) withReason++;
++				if (!mine.containsAll(rs)) withInherited++;
+ 			}
+ 		}
+ 		lines.sort((a, b) -> a[0].compareTo(b[0]));
+@@ -365,32 +373,18 @@
+ 			 java.io.BufferedWriter viaOut = Files.newBufferedWriter(p_viaFile, StandardCharsets.UTF_8)) {
+ 			System.out.println("Trying to write to:" + p_opFile + " and " + p_viaFile);
+ 			for (String[] l : lines) {
+-				String group = "";
+-				if (l[1] != null) {
+-					Integer n = renumber.get(l[1]);
+-					if (n == null) {
+-						n = renumber.size();
+-						renumber.put(l[1], n);
+-						List<String> ptrs = new ArrayList<>();
+-						for (EscapeReasons.Via v : EscapeReasons.viaGroups.get(Integer.parseInt(l[1])))
+-							ptrs.add(v.toString());
+-						Collections.sort(ptrs);
+-						viaOut.write(n + "\t");
+-						for (int i = 0; i < ptrs.size(); i++) {
+-							if (i > 0) viaOut.write(";");
+-							viaOut.write(ptrs.get(i));
+-						}
+-						viaOut.write("\n");
+-					}
+-					group = Integer.toString(n);
+-				}
+ 				reasonsOut.write(l[0]);
+ 				reasonsOut.write("\t");
+-				reasonsOut.write(group);
++				reasonsOut.write(viaGroupNumber(l[1], renumber, viaOut));
++				reasonsOut.write("\t");
++				reasonsOut.write(l[2]);
++				reasonsOut.write("\t");
++				reasonsOut.write(viaGroupNumber(l[3], renumber, viaOut));
+ 				reasonsOut.write("\n");
+ 			}
+ 			System.out.println("Reasons have been written: " + objects + " objects, "
+-					+ withReason + " with at least one reason, " + renumber.size()
++					+ withReason + " with at least one reason, " + withInherited
++					+ " carrying a reason inherited from their component, " + renumber.size()
+ 					+ " successor-pointer groups, "
+ 					+ EscapeReasons.nullMethodDrops.get() + " attributions dropped for a null method.");
+ 		} catch (IOException e) {
+@@ -399,6 +393,37 @@
+ 		}
+ 	}
+ 
++	static String reasonList(EnumSet<EscapeReason> rs) {
++		StringBuilder sb = new StringBuilder();
++		for (EscapeReason r : rs) {          // EnumSet iterates in declaration order
++			if (sb.length() > 0) sb.append(",");
++			sb.append(r.name());
++		}
++		return sb.toString();
++	}
++
++	/** Renumber a raw via-group index by first appearance, writing the group on first sight. */
++	static String viaGroupNumber(String raw, Map<String, Integer> renumber,
++								 java.io.BufferedWriter viaOut) throws IOException {
++		if (raw == null) return "";
++		Integer n = renumber.get(raw);
++		if (n == null) {
++			n = renumber.size();
++			renumber.put(raw, n);
++			List<String> ptrs = new ArrayList<>();
++			for (EscapeReasons.Via v : EscapeReasons.viaGroups.get(Integer.parseInt(raw)))
++				ptrs.add(v.toString());
++			Collections.sort(ptrs);
++			viaOut.write(n + "\t");
++			for (int i = 0; i < ptrs.size(); i++) {
++				if (i > 0) viaOut.write(";");
++				viaOut.write(ptrs.get(i));
++			}
++			viaOut.write("\n");
++		}
++		return Integer.toString(n);
++	}
++
+ 	static void saveStats(Map<SootMethod, HashMap<ObjectNode, EscapeStatus>> unresolved,
+ 						  Map<SootMethod, HashMap<ObjectNode, EscapeStatus>>resolved,
+ 						  String opDir,
+diff -ruN a/src/resolver/ReworkedResolver.java b/src/resolver/ReworkedResolver.java
+--- a/src/resolver/ReworkedResolver.java	2026-09-14 19:46:15.664475700 +0530
++++ b/src/resolver/ReworkedResolver.java	2026-09-14 19:46:15.795873100 +0530
+@@ -737,11 +737,24 @@
+      * every member and the side map is a set.
+      */
+     private void stampComponent(List<StandardObject> component, EnumSet<EscapeReason> rs,
+-                                Set<EscapeReasons.Via> via) {
++                                Set<EscapeReasons.Via> via,
++                                Map<StandardObject, EnumSet<EscapeReason>> ownFired,
++                                Map<StandardObject, Set<EscapeReasons.Via>> ownVia) {
+         if (rs.isEmpty()) return;
+-        for (StandardObject s : component)
+-            for (EscapeReason r : rs)
+-                EscapeReasons.record(s.getMethod(), s.getObject(), r);
++        // patch 0005: the union still goes on every member, but only what fired on the member
++        // itself is recorded as its own; the rest is inherited from the component.
++        for (StandardObject s : component) {
++            EnumSet<EscapeReason> mine = ownFired.get(s);
++            for (EscapeReason r : rs) {
++                if (mine != null && mine.contains(r))
++                    EscapeReasons.record(s.getMethod(), s.getObject(), r);
++                else
++                    EscapeReasons.inherit(s.getMethod(), s.getObject(), r);
++            }
++            Set<EscapeReasons.Via> myVia = ownVia.get(s);
++            if (myVia != null)
++                EscapeReasons.assignOwnVia(s.getMethod(), s.getObject(), myVia);
++        }
+ 
+         // The successor pointers travel with the propagated reasons they explain, stored once
+         // for the component (see EscapeReasons.viaGroups). A pointer to a member of this same
+@@ -786,62 +799,75 @@
+         EnumSet<EscapeReason> fired = EnumSet.noneOf(EscapeReason.class);
+         // patch 0004: which successor each propagated reason fired through
+         Set<EscapeReasons.Via> via = new HashSet<>();
++        // patch 0005: the same two, per member - what fired ON that member
++        Map<StandardObject, EnumSet<EscapeReason>> ownFired = new HashMap<>();
++        Map<StandardObject, Set<EscapeReasons.Via>> ownVia = new HashMap<>();
+ 
+         for (StandardObject sobj : component) {
++            EnumSet<EscapeReason> mine = EnumSet.noneOf(EscapeReason.class);
++            Set<EscapeReasons.Via> myVia = new HashSet<>();
++            ownFired.put(sobj, mine);
++            ownVia.put(sobj, myVia);
+ 
+             if (isReturnObject(sobj))
+-                fired.add(EscapeReason.RETURNED);
++                mine.add(EscapeReason.RETURNED);
+ 
+             if (this.noBCIMethods.contains(sobj.getMethod()))
+-                fired.add(EscapeReason.NO_BCI_METHOD_AT_RESOLVER);
++                mine.add(EscapeReason.NO_BCI_METHOD_AT_RESOLVER);
+ 
+             HashMap<ObjectNode, EscapeStatus> ess = this.solvedSummaries.get(sobj.getMethod());
+             EscapeStatus sobjEs = (ess == null) ? null : ess.get(sobj.getObject());
+             if (sobjEs != null && sobjEs.doesEscape()) {
+                 fired.addAll(EscapeReasons.get(sobj.getMethod(), sobj.getObject()));
+                 via.addAll(EscapeReasons.getVia(sobj.getMethod(), sobj.getObject()));
++                // what this member recorded itself before resolution reached it
++                mine.addAll(EscapeReasons.getOwn(sobj.getMethod(), sobj.getObject()));
+             }
+ 
+             if (isAssignedToThis(sobj))
+-                fired.add(EscapeReason.ASSIGNED_TO_THIS_OR_PARAM);
++                mine.add(EscapeReason.ASSIGNED_TO_THIS_OR_PARAM);
+ 
+             if (StoreEscape.MarkParamReturnEscaping == false
+                     && sobj.getObject().type == ObjectType.parameter) {
+                 if (isEscapingParam(sobj)) {
+-                    fired.add(EscapeReason.PARAM_ESCAPES_VIA_SUCCESSOR);
++                    mine.add(EscapeReason.PARAM_ESCAPES_VIA_SUCCESSOR);
+                     // isEscapingParam() stops at the first hit; name every successor it
+                     // would have accepted, with the same skip
+                     for (StandardObject nxt : this.graph.get(sobj)) {
+                         if (isReturnObject(nxt))
+                             continue;
+                         if (isEscapingObject(nxt))
+-                            via.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
++                            myVia.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
+                     }
+                 }
++                fired.addAll(mine);
++                via.addAll(myVia);
+                 // resolve() continues here too, so the successor scan below is not reached
+                 continue;
+             }
+ 
+             Set<StandardObject> succs = this.graph.get(sobj);
+-            if (succs == null)
+-                continue;
+-            for (StandardObject nxt : succs) {
+-                try {
+-                    if (StoreEscape.MarkParamReturnEscaping == false
+-                            && isReturnedFromDifferentFunction(sobj, nxt))
+-                        continue;
+-                    if (isEscapingObject(nxt)) {
+-                        fired.add(EscapeReason.TRANSITIVE_SUCCESSOR);
+-                        via.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
++            if (succs != null) {
++                for (StandardObject nxt : succs) {
++                    try {
++                        if (StoreEscape.MarkParamReturnEscaping == false
++                                && isReturnedFromDifferentFunction(sobj, nxt))
++                            continue;
++                        if (isEscapingObject(nxt)) {
++                            mine.add(EscapeReason.TRANSITIVE_SUCCESSOR);
++                            myVia.add(new EscapeReasons.Via(nxt.getMethod(), nxt.getObject()));
++                        }
++                    }
++                    catch (Exception e) {
++                        // same swallow as resolve(), for the same reason: a missing summary
+                     }
+-                }
+-                catch (Exception e) {
+-                    // same swallow as resolve(), for the same reason: a missing summary
+                 }
+             }
++            fired.addAll(mine);
++            via.addAll(myVia);
+         }
+ 
+-        stampComponent(component, fired, via);
++        stampComponent(component, fired, via, ownFired, ownVia);
+     }
+ 
+     void SetComponent ( List<StandardObject> comp, EscapeState es) {

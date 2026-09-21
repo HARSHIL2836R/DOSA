@@ -1,0 +1,907 @@
+Subject: [PATCH 2/2] es: record WHY each object escapes, in a side map
+
+WHAT THIS CHANGES
+-----------------
+Adds two files and edits eight, ~330 lines net:
+
+  es/EscapeReason.java    new. One enum constant per site in the analysis that can put
+                          Escape into a status, with isSurrender() splitting "the program
+                          does this" from "the analysis gave up".
+  es/EscapeReasons.java   new. A static, append-only side map
+                          Map<SootMethod, Map<ObjectNode, EnumSet<EscapeReason>>>.
+  ptg/PointsToGraph       gains `public SootMethod method` and an EscapeReason argument on
+                          cascadeEscape/recursiveCascadeEscape.
+  handlers/*              each Escape-introducing site stamps its own constant.
+  analyser/StaticAnalyser sets ptg.method in apply(); stamps NO_BCI_METHOD.
+  utils/KillCallerOnly    stamps CALLER_ONLY_UNRESOLVABLE.
+  resolver/ReworkedResolver  adds collectReasons(), a non-short-circuiting twin of
+                          resolve() that writes only to the side map.
+  main/Main               exposes MarkStoreEscaping as argv[7]; writes <dirname>.reasons.
+
+WHY
+---
+Escape multiplicity cannot be recovered from the lattice after the fact. `Escape` is a
+singleton with hashCode() == 0 (es/Escape.java) and EscapeStatus.purge() /
+purgeAndEscape() replace the whole status set with {Escape} the moment escape is
+established. So today every escaping object has exactly one status and every NoEscape
+object has none, and a "number of escape reasons" plot has two bars by construction.
+The reasons have to be captured at the moment they fire, in a structure the lattice does
+not own. That is what the side map is.
+
+THE ESCAPE VERDICT MUST NOT CHANGE, AND THAT IS CHECKABLE
+---------------------------------------------------------
+Nothing in the analysis ever reads the side map. Three specific design choices exist so
+that this claim is verifiable rather than asserted:
+
+  * resolve() is NOT modified. The four conditions are re-evaluated by a separate
+    collectReasons() which never calls SetComponent and never writes solvedSummaries.
+  * collectReasons() runs immediately BEFORE resolve() for each component, inside FindSCC,
+    not after FindSCC returns. FindSCC *is* the resolution loop: resolve() mutates
+    solvedSummaries per component in reverse topological order and a later component's
+    successor test reads what earlier ones wrote. Evaluating after the loop would test a
+    different state and would report TRANSITIVE_SUCCESSOR for nearly everything. This is a
+    deliberate deviation from the design note, made for fidelity, and it does not weaken
+    the diff check.
+  * collectReasons() stamps the WHOLE component, mirroring SetComponent. resolve() escapes
+    every member when any one member fires, so attributing the reason only to the firing
+    member leaves the others Escape with an empty reason set. Measured on corpus/M02 before
+    this was changed: 3 of 7 objects, whose component's reason had fired on a callee
+    parameter node in another method.
+  * cascadeEscape's reason argument is required rather than defaulted, so a new call site
+    cannot silently produce an unattributed escape: the compiler names every one.
+
+The check is: run every stava/tests/* under the uninstrumented and the instrumented build
+and diff <dirname>.res. See Micro-Corpus-Log Phase 11, F11.1.
+
+argv[7]
+-------
+Main.setStoreEscapeOptions already read argv[5] (ReduceParamDependence) and argv[6]
+(MarkParamReturnEscaping). MarkStoreEscaping, the largest precision lever in the codebase,
+was reachable only by editing config/StoreEscape.java and recompiling — which is the only
+reason patches/0001-store-escape-off.patch exists. It is now argv[7]. The compiled-in
+default is unchanged: config/StoreEscape.java still ships MarkStoreEscaping = true.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+No lattice type, no handler control flow, no resolver decision, no .info format, no .res
+format, no stats.txt. One new output file, <dirname>.reasons, written once and truncating,
+sorted, joinable on (method signature, bci, objectType).
+
+HOW IT IS APPLIED
+-----------------
+NEVER to stava/. build.sh copies stava/src to heapviz/build/stava-src-reason/ and applies
+this patch to the copy. It is independent of 0001: with argv[7] available, the pye
+configuration no longer needs a patched source tree, and 0001 is retained only to reproduce
+phases 1-10 (USE_PATCH=1).
+
+diff -ruN a/src/analyser/StaticAnalyser.java b/src/analyser/StaticAnalyser.java
+--- a/src/analyser/StaticAnalyser.java	2026-09-02 00:11:37.159674400 +0530
++++ b/src/analyser/StaticAnalyser.java	2026-09-02 00:11:37.268205700 +0530
+@@ -2,6 +2,8 @@
+ 
+ import es.EscapeStatus;
+ import es.Escape;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import es.NoEscape;
+ import handlers.JAssignStmt.JAssignStmtHandler;
+ import handlers.*;
+@@ -306,7 +308,9 @@
+ 			// System.out.println(ptg);
+ 			// System.out.println(summary);
+ 			// System.out.println("Escap: "+obj);
+-			ptg.cascadeEscape(obj, summary);
++			// Unreachable in every shipped configuration: markAsEscaping is called only when
++			// allNonEscaping is true, and nothing ever sets that field.
++			ptg.cascadeEscape(obj, summary, EscapeReason.NATIVE_BLACKLIST);
+ 		}
+ 	}
+ 
+@@ -320,7 +324,9 @@
+ 	private void setParamsAsEscaping(SootMethod m, Map<ObjectNode, EscapeStatus> summary) {
+ 		summary.clear();
+ 		for (int i=0; i< m.getParameterCount(); i++) {
+-			summary.put(new ObjectNode(i, ObjectType.parameter), new EscapeStatus(Escape.getInstance()));
++			ObjectNode p = new ObjectNode(i, ObjectType.parameter);
++			summary.put(p, new EscapeStatus(Escape.getInstance()));
++			EscapeReasons.record(m, p, EscapeReason.NO_BCI_METHOD);
+ 		}
+ 	}
+ 
+@@ -331,6 +337,9 @@
+ 	 */
+ 
+ 	public void apply(SootMethod m, Unit u, PointsToGraph ptg, Map<ObjectNode, EscapeStatus> summary) {
++		// The one place that holds both the method and the graph the handlers will mutate.
++		// Purely for attributing EscapeReasons; nothing in the analysis reads ptg.method.
++		ptg.method = m;
+ 		// System.err.println(u+" "+u.getClass().getName());
+ 		if (u instanceof JAssignStmt) {
+ 			JAssignStmtHandler.handle(m, u, ptg, summary);
+diff -ruN a/src/es/EscapeReason.java b/src/es/EscapeReason.java
+--- a/src/es/EscapeReason.java	1970-01-01 05:30:00.000000000 +0530
++++ b/src/es/EscapeReason.java	2026-09-02 00:11:37.305916000 +0530
+@@ -0,0 +1,80 @@
++package es;
++
++/*
++ * EscapeReason — why an abstract object was marked Escape.
++ *
++ * This enum exists because the lattice cannot carry the information. `Escape` is a singleton
++ * with hashCode() == 0 (es/Escape.java) and EscapeStatus.purge()/purgeAndEscape() replaces the
++ * whole status set with {Escape} the moment escape is established. So by construction every
++ * escaping object has exactly one status and no alternatives survive. The reasons live in a
++ * side map (es/EscapeReasons.java) that is append-only, and nothing here is ever read by the
++ * analysis: the verdict is computed exactly as it was before.
++ *
++ * One constant per site that can introduce Escape. The census was taken with
++ *     grep -rn "cascadeEscape\|setEscape()\|new EscapeStatus(Escape.getInstance())" src/
++ * over stava at e03dac0 and every line below was read before it was stamped.
++ *
++ * isSurrender() splits "the program does this" from "the analysis gave up". That split is a
++ * first-class output: it is what separates a property of the benchmark from a property of
++ * Stava.
++ */
++public enum EscapeReason {
++
++	// ---- real escapes ---------------------------------------------------------------
++	/** StoreStmt.java:117, StaticStoreStmt — `C.f = local`. */
++	STATIC_FIELD_STORE(false),
++	/** StoreStmt.java:103 — `a.f = b` where a's base has no points-to set. */
++	STORE_UNTRACKED_BASE(false),
++	/** StoreStmt.java:128, :145 — a class or string constant stored into a field/array. */
++	CONSTANT_STORE(false),
++	/** StoreStmt.java:40 — the MarkStoreEscaping short circuit, before the LHS is examined. */
++	STORE_CASCADE_UNTYPED(false),
++	/** LoadStmt.java:45 — `local = C.staticField`; the loaded value is globally reachable. */
++	STATIC_FIELD_LOAD(false),
++	/** LoadStmt.java:101, :123 — `a = b.f` / `a = b[i]` where b has no points-to set. */
++	LOAD_UNTRACKED_BASE(false),
++	/** JAssignStmtHandler.java:72 — an interned String/Class constant materialised in a local. */
++	CONSTANT_OBJECT(false),
++	/** NewStmt.java:49 — IsMultiThreadedClass.check, the allocated class is thread-reachable. */
++	THREAD_REACHABLE_CLASS(false),
++	/** JThrowStmtHandler.java:19. */
++	THROWN(false),
++	/** MonitorStmtHandler.java:20 — used as a monitor. */
++	MONITOR(false),
++	/** JInvokeStmtHandler.java:200 — argument to a blacklisted native. */
++	NATIVE_BLACKLIST(false),
++	/** JIdentityStmtHandler.java:49 — a caught-exception reference. */
++	CAUGHT_EXCEPTION(false),
++	/** ReworkedResolver.java:645 isReturnObject, fires at :652. */
++	RETURNED(false),
++	/** ReworkedResolver.java:582 isAssignedToThis, reached through isEscapingObject at :655. */
++	ASSIGNED_TO_THIS_OR_PARAM(false),
++	/** ReworkedResolver.java:666 isEscapingParam, fires at :668. */
++	PARAM_ESCAPES_VIA_SUCCESSOR(false),
++	/** ReworkedResolver.java:688 isEscapingObject(nxt), fires at :690. */
++	TRANSITIVE_SUCCESSOR(false),
++
++	// ---- analysis surrender, not escape ---------------------------------------------
++	/**
++	 * The object has no recoverable bytecode index and is folded onto the singleton
++	 * InvalidBCIObjectNode: NewStmt.java:56, LoadStmt.java:93, StoreStmt.java:161, :178,
++	 * JAssignStmtHandler.java:73.
++	 */
++	NO_BCI_OBJECT(true),
++	/** StaticAnalyser.java:323, setParamsAsEscaping — the whole method had no BCI. */
++	NO_BCI_METHOD(true),
++	/** ReworkedResolver.java:557 — the method is in noBCIMethods, seen from the resolver. */
++	NO_BCI_METHOD_AT_RESOLVER(true),
++	/** KillCallerOnly.java:33 — status is caller-conditional only and nothing will resolve it. */
++	CALLER_ONLY_UNRESOLVABLE(true);
++
++	private final boolean surrender;
++
++	EscapeReason(boolean surrender) {
++		this.surrender = surrender;
++	}
++
++	public boolean isSurrender() {
++		return surrender;
++	}
++}
+diff -ruN a/src/es/EscapeReasons.java b/src/es/EscapeReasons.java
+--- a/src/es/EscapeReasons.java	1970-01-01 05:30:00.000000000 +0530
++++ b/src/es/EscapeReasons.java	2026-09-02 00:11:37.301740700 +0530
+@@ -0,0 +1,74 @@
++package es;
++
++import ptg.ObjectNode;
++import soot.SootMethod;
++
++import java.util.EnumSet;
++import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
++
++/*
++ * EscapeReasons — the append-only side map.
++ *
++ * Keyed the same way the rest of the analysis keys an abstract object: (declaring method,
++ * ObjectNode). Nothing in this class is ever read by the analysis; it is write-only from the
++ * analysis's point of view and is drained once, by Main.printReasons, after resolution.
++ *
++ * APPEND-ONLY IS THE WHOLE POINT. EscapeStatus.purge() exists precisely to discard
++ * alternatives once Escape is present, which is why the multiplicity this map records cannot
++ * be recovered from the lattice afterwards. Nothing here ever removes a reason.
++ *
++ * Thread safety: Soot may run BodyTransformers concurrently (StaticAnalyser already uses
++ * ConcurrentHashMap for ptgs and summaries), so the outer maps are concurrent and each
++ * per-method map is guarded while an EnumSet is mutated. EnumSet itself is not thread safe.
++ */
++public class EscapeReasons {
++
++	public static final Map<SootMethod, Map<ObjectNode, EnumSet<EscapeReason>>> reasons =
++			new ConcurrentHashMap<>();
++
++	private static Map<ObjectNode, EnumSet<EscapeReason>> forMethod(SootMethod m) {
++		return reasons.computeIfAbsent(m, k -> new ConcurrentHashMap<>());
++	}
++
++	/** Stamp one reason onto one object. Silently ignores a null method: see note in seen(). */
++	public static void record(SootMethod m, ObjectNode obj, EscapeReason r) {
++		if (m == null || obj == null || r == null) return;
++		Map<ObjectNode, EnumSet<EscapeReason>> mm = forMethod(m);
++		synchronized (mm) {
++			mm.computeIfAbsent(obj, k -> EnumSet.noneOf(EscapeReason.class)).add(r);
++		}
++	}
++
++	/**
++	 * Register an object with no reason, so that the zero bucket in the histogram is real
++	 * rather than inferred from absence. Objects that never escape must appear in .reasons
++	 * with an empty reason list.
++	 *
++	 * A null method means the PointsToGraph in hand was not the one StaticAnalyser.apply set
++	 * a method on — that would be a bug rather than a missing reason, so it is counted.
++	 */
++	public static void seen(SootMethod m, ObjectNode obj) {
++		if (m == null || obj == null) {
++			nullMethodDrops.incrementAndGet();
++			return;
++		}
++		Map<ObjectNode, EnumSet<EscapeReason>> mm = forMethod(m);
++		synchronized (mm) {
++			mm.computeIfAbsent(obj, k -> EnumSet.noneOf(EscapeReason.class));
++		}
++	}
++
++	/** Counted and printed by Main so a silent attribution loss cannot go unnoticed. */
++	public static final java.util.concurrent.atomic.AtomicLong nullMethodDrops =
++			new java.util.concurrent.atomic.AtomicLong();
++
++	public static EnumSet<EscapeReason> get(SootMethod m, ObjectNode obj) {
++		Map<ObjectNode, EnumSet<EscapeReason>> mm = reasons.get(m);
++		if (mm == null) return EnumSet.noneOf(EscapeReason.class);
++		synchronized (mm) {
++			EnumSet<EscapeReason> s = mm.get(obj);
++			return s == null ? EnumSet.noneOf(EscapeReason.class) : EnumSet.copyOf(s);
++		}
++	}
++}
+diff -ruN a/src/handlers/JAssignStmt/JAssignStmtHandler.java b/src/handlers/JAssignStmt/JAssignStmtHandler.java
+--- a/src/handlers/JAssignStmt/JAssignStmtHandler.java	2026-09-02 00:11:37.175735800 +0530
++++ b/src/handlers/JAssignStmt/JAssignStmtHandler.java	2026-09-02 00:11:37.245597000 +0530
+@@ -3,6 +3,8 @@
+ import es.ConditionalValue;
+ import es.Escape;
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import handlers.JInvokeStmtHandler;
+ import ptg.*;
+ import soot.*;
+@@ -70,7 +72,13 @@
+ 		Local lhs = (Local) ((JAssignStmt) u).getLeftOp();
+ 		ptg.addVar(lhs, obj);
+ 		EscapeStatus es = new EscapeStatus(Escape.getInstance());
+-		if (obj instanceof InvalidBCIObjectNode) es.setEscape();
++		// An interned String or Class constant: globally reachable by construction. This is a
++		// real escape; the no-BCI case on the next line is a separate, additional reason.
++		EscapeReasons.record(ptg.method, obj, EscapeReason.CONSTANT_OBJECT);
++		if (obj instanceof InvalidBCIObjectNode) {
++			es.setEscape();
++			EscapeReasons.record(ptg.method, obj, EscapeReason.NO_BCI_OBJECT);
++		}
+ 		summary.put(obj, es);
+ 	}
+ 
+diff -ruN a/src/handlers/JAssignStmt/LoadStmt.java b/src/handlers/JAssignStmt/LoadStmt.java
+--- a/src/handlers/JAssignStmt/LoadStmt.java	2026-09-02 00:11:37.182578000 +0530
++++ b/src/handlers/JAssignStmt/LoadStmt.java	2026-09-02 00:11:37.242592400 +0530
+@@ -4,6 +4,8 @@
+ import config.UpdateType;
+ import es.Escape;
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import ptg.*;
+ import soot.Local;
+ import soot.SootField;
+@@ -43,6 +45,9 @@
+ 		Local lhs = (Local) ((JAssignStmt) u).getLeftOp();
+ 		ObjectNode obj = new ObjectNode(getBCI.get(u), ObjectType.external);
+ 		EscapeStatus es = new EscapeStatus(Escape.getInstance());
++		// `local = C.staticField`: the loaded value is reachable from a static, so it escapes.
++		// This is a real escape, not a missing BCI - the BCI is right there in the ObjectNode.
++		EscapeReasons.record(ptg.method, obj, EscapeReason.STATIC_FIELD_LOAD);
+ 		if(AssignStmtHandler.LOAD == UpdateType.STRONG) {
+ 			ptg.forcePutVar(lhs, obj);
+ 		} else {
+@@ -90,7 +95,12 @@
+ 				}
+ 				// make field
+ 				EscapeStatus es = parentsES.makeField(rhs.getField());
+-				if(obj instanceof InvalidBCIObjectNode) es.setEscape();
++				if(obj instanceof InvalidBCIObjectNode) {
++					es.setEscape();
++					EscapeReasons.record(ptg.method, obj, EscapeReason.NO_BCI_OBJECT);
++				} else {
++					EscapeReasons.seen(ptg.method, obj);
++				}
+ 				summary.put(obj, es);
+ 			}
+ 		} else {
+@@ -99,6 +109,7 @@
+ 			// set to escape
+ 			ObjectNode obj = ObjectNode.createObject(u, ObjectType.external);
+ 			EscapeStatus es = new EscapeStatus(Escape.getInstance());
++			EscapeReasons.record(ptg.method, obj, EscapeReason.LOAD_UNTRACKED_BASE);
+ 			if(AssignStmtHandler.LOAD==UpdateType.STRONG) ptg.forcePutVar(lhs, obj);
+ 			else ptg.addVar(lhs, obj);
+ 			summary.put(obj, es);
+@@ -121,6 +132,7 @@
+ 			ObjectNode obj = new ObjectNode(utils.getBCI.get(u), ObjectType.external);
+ 			ptg.forcePutVar(lhs, obj);
+ 			summary.put(obj, new EscapeStatus(Escape.getInstance()));
++			EscapeReasons.record(ptg.method, obj, EscapeReason.LOAD_UNTRACKED_BASE);
+ 			return;
+ 		}
+ 
+diff -ruN a/src/handlers/JAssignStmt/NewStmt.java b/src/handlers/JAssignStmt/NewStmt.java
+--- a/src/handlers/JAssignStmt/NewStmt.java	2026-09-02 00:11:37.177261500 +0530
++++ b/src/handlers/JAssignStmt/NewStmt.java	2026-09-02 00:11:37.249147800 +0530
+@@ -4,6 +4,8 @@
+ import config.UpdateType;
+ import es.Escape;
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import es.NoEscape;
+ import ptg.InvalidBCIObjectNode;
+ import ptg.ObjectNode;
+@@ -46,15 +48,24 @@
+ 		Value rhs = ((JAssignStmt) u).getRightOp();
+ 		Value lhs = ((JAssignStmt) u).getLeftOp();
+ 		EscapeStatus es = new EscapeStatus();
+-		if (IsMultiThreadedClass.check(((JNewExpr) rhs).getBaseType().getSootClass())) es.setEscape();
++		boolean threadReachable =
++				IsMultiThreadedClass.check(((JNewExpr) rhs).getBaseType().getSootClass());
++		if (threadReachable) es.setEscape();
+ 
+ 		ObjectNode obj;
++		boolean noBCI = false;
+ 		try {
+ 			obj = new ObjectNode(getBCI.get(u), ObjectType.internal);
+ 		} catch (Exception e1) {
+ 			obj = InvalidBCIObjectNode.getInstance(ObjectType.internal);
+ 			es.setEscape();
++			noBCI = true;
+ 		}
++		// The reason has to be stamped after the object exists, because on the no-BCI path the
++		// object identity itself changes to the InvalidBCIObjectNode singleton.
++		if (threadReachable) EscapeReasons.record(ptg.method, obj, EscapeReason.THREAD_REACHABLE_CLASS);
++		if (noBCI) EscapeReasons.record(ptg.method, obj, EscapeReason.NO_BCI_OBJECT);
++		else EscapeReasons.seen(ptg.method, obj);
+ 		if (AssignStmtHandler.NEW == UpdateType.STRONG){
+ 			ptg.forcePutVar((Local) lhs, obj);
+ 		} else {
+@@ -71,6 +82,7 @@
+ 		EscapeStatus es;
+ 		es = new EscapeStatus(NoEscape.getInstance());
+ 		ObjectNode obj = new ObjectNode(getBCI.get(u), ObjectType.internal);
++		EscapeReasons.seen(ptg.method, obj);
+ 		try {
+ 			ptg.forcePutVar((Local) lhs, obj);
+ 		} catch (Exception e) {
+diff -ruN a/src/handlers/JAssignStmt/StoreStmt.java b/src/handlers/JAssignStmt/StoreStmt.java
+--- a/src/handlers/JAssignStmt/StoreStmt.java	2026-09-02 00:11:37.178325700 +0530
++++ b/src/handlers/JAssignStmt/StoreStmt.java	2026-09-02 00:11:37.248120100 +0530
+@@ -5,6 +5,8 @@
+ import config.StoreEscape;
+ import es.Escape;
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import ptg.*;
+ import soot.Local;
+ import soot.SootField;
+@@ -37,7 +39,10 @@
+ 		
+ 		if (StoreEscape.MarkStoreEscaping) {
+ 			if (rhs instanceof Local) {
+-				ptg.cascadeEscape((Local)rhs, summary);
++				// The short circuit fires before the LHS is examined, so a static store, an
++				// instance store and an array store are indistinguishable here. That
++				// collapse is the reason this constant is named UNTYPED.
++				ptg.cascadeEscape((Local)rhs, summary, EscapeReason.STORE_CASCADE_UNTYPED);
+ 				return;
+ 			}
+ 		}
+@@ -100,7 +105,7 @@
+ 		if (lhsObjSet == null) {
+ 			// the lhs.base must be a field variable.
+ 			// simply set rhs to escape
+-			ptg.cascadeEscape(rhs, summary);
++			ptg.cascadeEscape(rhs, summary, EscapeReason.STORE_UNTRACKED_BASE);
+ 			return;
+ 		}
+ 		// add field object for every parent object.
+@@ -114,7 +119,7 @@
+ 	}
+ 
+ 	private static void StaticStoreStmt(Unit u, PointsToGraph ptg, Map<ObjectNode, EscapeStatus> summary) {
+-		ptg.cascadeEscape((Local) ((JAssignStmt) u).getRightOp(), summary);
++		ptg.cascadeEscape((Local) ((JAssignStmt) u).getRightOp(), summary, EscapeReason.STATIC_FIELD_STORE);
+ 	}
+ 
+ 	private static void storeClassConstantToArrayRef(Unit u, PointsToGraph ptg, Map<ObjectNode, EscapeStatus> summary) {
+@@ -126,6 +131,7 @@
+ 		}
+ 		ptg.storeStmtArrayRef((Local) lhs.getBase(), obj);
+ 		summary.put(obj, new EscapeStatus(Escape.getInstance()));
++		EscapeReasons.record(ptg.method, obj, EscapeReason.CONSTANT_STORE);
+ 	}
+ 
+ 	private static void storeClassConstantToInstanceFieldRefStmt(Unit u, PointsToGraph ptg, Map<ObjectNode, EscapeStatus> summary) {
+@@ -143,6 +149,7 @@
+ 		}
+ 
+ 		summary.put(obj, new EscapeStatus(Escape.getInstance()));
++		EscapeReasons.record(ptg.method, obj, EscapeReason.CONSTANT_STORE);
+ 	}
+ 
+ 	private static void storeStringConstantToInstanceFieldRefStmt(Unit u, PointsToGraph ptg, Map<ObjectNode, EscapeStatus> summary) {
+@@ -158,7 +165,10 @@
+ 			ptg.WEAK_makeField((Local) lhs.getBase(), lhs.getField(), obj);
+ 		}
+ 		EscapeStatus es = new EscapeStatus();
+-		if (obj instanceof InvalidBCIObjectNode) es.setEscape();
++		if (obj instanceof InvalidBCIObjectNode) {
++			es.setEscape();
++			EscapeReasons.record(ptg.method, obj, EscapeReason.NO_BCI_OBJECT);
++		}
+ 		if(!es.containsNoEscape()) {
+ 			for (ObjectNode parent : ptg.vars.get(lhs.getBase())) {
+ 				es.addEscapeStatus(summary.get(parent));
+@@ -175,7 +185,10 @@
+ 		}
+ 		ptg.storeStmtArrayRef((Local) lhs.getBase(), obj);
+ 		EscapeStatus es = new EscapeStatus();
+-		if (obj instanceof InvalidBCIObjectNode) es.setEscape();
++		if (obj instanceof InvalidBCIObjectNode) {
++			es.setEscape();
++			EscapeReasons.record(ptg.method, obj, EscapeReason.NO_BCI_OBJECT);
++		}
+ 		if(!es.containsNoEscape()) {
+ 			for (ObjectNode parent : ptg.vars.get(lhs.getBase())) {
+ 				es.addEscapeStatus(summary.get(parent));
+diff -ruN a/src/handlers/JIdentityStmtHandler.java b/src/handlers/JIdentityStmtHandler.java
+--- a/src/handlers/JIdentityStmtHandler.java	2026-09-02 00:11:37.172216000 +0530
++++ b/src/handlers/JIdentityStmtHandler.java	2026-09-02 00:11:37.251139800 +0530
+@@ -2,6 +2,8 @@
+ 
+ import es.ConditionalValue;
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import ptg.ObjectNode;
+ import ptg.ObjectType;
+ import ptg.PointsToGraph;
+@@ -47,6 +49,7 @@
+ 			ptg.forcePutVar((Local) lhs, obj);
+ 			EscapeStatus e = new EscapeStatus();
+ 			e.setEscape();
++			EscapeReasons.record(m, obj, EscapeReason.CAUGHT_EXCEPTION);
+ 			summary.put(obj, e);
+ 		} else {
+ 			try {
+@@ -60,6 +63,7 @@
+ 		if (cvobj != null) {
+ 			ConditionalValue cv = new ConditionalValue(null, cvobj, true);
+ 			summary.put(obj, new EscapeStatus(cv));
++			EscapeReasons.seen(m, obj);
+ 		}
+ 	}
+ }
+diff -ruN a/src/handlers/JInvokeStmtHandler.java b/src/handlers/JInvokeStmtHandler.java
+--- a/src/handlers/JInvokeStmtHandler.java	2026-09-02 00:11:37.171219000 +0530
++++ b/src/handlers/JInvokeStmtHandler.java	2026-09-02 00:11:37.239600600 +0530
+@@ -1,6 +1,7 @@
+ package handlers;
+ 
+ import es.ConditionalValue;
++import es.EscapeReason;
+ import es.EscapeStatus;
+ import ptg.ObjectNode;
+ import ptg.ObjectType;
+@@ -197,7 +198,7 @@
+ 						if ( !(arg instanceof Constant) )	{		// Notice the not(!) 
+ 							if (isNative && !iswhiteListed) {
+ 								System.out.println("Escaping: "+args.get(i));
+-								ptg.cascadeEscape((Local) args.get(i), summary);
++								ptg.cascadeEscape((Local) args.get(i), summary, EscapeReason.NATIVE_BLACKLIST);
+ 								nativeLocals.putIfAbsent(srcMethod,new ArrayList<>());
+ 								nativeLocals.get(srcMethod).add((Local)args.get(i));
+ 							}
+diff -ruN a/src/handlers/JThrowStmtHandler.java b/src/handlers/JThrowStmtHandler.java
+--- a/src/handlers/JThrowStmtHandler.java	2026-09-02 00:11:37.170204400 +0530
++++ b/src/handlers/JThrowStmtHandler.java	2026-09-02 00:11:37.240592900 +0530
+@@ -1,6 +1,8 @@
+ package handlers;
+ 
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import ptg.ObjectNode;
+ import ptg.PointsToGraph;
+ import soot.Local;
+@@ -16,7 +18,10 @@
+ 		Value op = stmt.getOp();
+ 		if (op instanceof Local) {
+ 			if (ptg.vars.containsKey(op)) {
+-				ptg.vars.get(op).forEach(obj -> summary.get(obj).setEscape());
++				ptg.vars.get(op).forEach(obj -> {
++					summary.get(obj).setEscape();
++					EscapeReasons.record(ptg.method, obj, EscapeReason.THROWN);
++				});
+ 			} else {
+ 				// throw new IllegalArgumentException("No ptset for " + u.toString() + " found!");
+ 			}
+diff -ruN a/src/handlers/MonitorStmtHandler.java b/src/handlers/MonitorStmtHandler.java
+--- a/src/handlers/MonitorStmtHandler.java	2026-09-02 00:11:37.169198600 +0530
++++ b/src/handlers/MonitorStmtHandler.java	2026-09-02 00:11:37.241593100 +0530
+@@ -1,6 +1,8 @@
+ package handlers;
+ 
+ import es.EscapeStatus;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import ptg.ObjectNode;
+ import ptg.PointsToGraph;
+ import soot.Local;
+@@ -17,7 +19,10 @@
+ 		Value op = stmt.getOp();
+ 		if (op instanceof Local) {
+ 			if (ptg.vars.containsKey(op)) {
+-				ptg.vars.get(op).forEach(obj -> summary.get(obj).setEscape());
++				ptg.vars.get(op).forEach(obj -> {
++					summary.get(obj).setEscape();
++					EscapeReasons.record(ptg.method, obj, EscapeReason.MONITOR);
++				});
+ 			} else {
+ 				System.out.println("[MonitorStmtHandler] Warning: No ptset for " + u.toString() + " found!");
+ //				throw new IllegalArgumentException("No ptset for "+u.toString()+" found!");
+diff -ruN a/src/main/Main.java b/src/main/Main.java
+--- a/src/main/Main.java	2026-09-02 00:11:37.194191700 +0530
++++ b/src/main/Main.java	2026-09-02 00:11:37.254612800 +0530
+@@ -48,6 +48,22 @@
+ 			else
+ 				StoreEscape.MarkParamReturnEscaping = false;
+ 		}
++
++		/*
++		 * argv[7]: MarkStoreEscaping. It is the single largest precision lever in the code
++		 * (StoreStmt.java:38 short-circuits every field store while it is true) and it was
++		 * previously reachable only by editing config/StoreEscape.java and recompiling.
++		 * The default is unchanged: config/StoreEscape.java still ships true.
++		 */
++		if (args.length >= 8) {
++			if (args[7].equals("true"))
++				StoreEscape.MarkStoreEscaping = true;
++			else
++				StoreEscape.MarkStoreEscaping = false;
++		}
++		System.out.println("[config] MarkStoreEscaping=" + StoreEscape.MarkStoreEscaping
++				+ " ReduceParamDependence=" + StoreEscape.ReduceParamDependence
++				+ " MarkParamReturnEscaping=" + StoreEscape.MarkParamReturnEscaping);
+ 	}
+ 	public static void main(String[] args) {
+ 
+@@ -142,6 +158,8 @@
+ 			saveStats(sr.existingSummaries, resolved, args[4], staticAnalyser.ptgs);
+ 	
+ 			printResForJVM(sr.solvedSummaries, args[2], args[4]);
++
++			printReasons(StaticAnalyser.ptgs, resolved, args[2], args[4]);
+ 		}
+ 		else {
+ 			SummaryResolver sr = new SummaryResolver();
+@@ -279,6 +297,64 @@
+ 			e.printStackTrace();
+ 		}
+ 	}
++
++	/*
++	 * printReasons — <dirname>.reasons, one line per abstract object:
++	 *
++	 *     <method signature>	<bci>	<objectType>	REASON,REASON,REASON
++	 *
++	 * Objects with no reason are emitted with an EMPTY last field, so the zero bucket of the
++	 * multiplicity histogram is a measured value and not an inference from absence. That is
++	 * why this iterates the resolved summaries rather than the side map: the side map only
++	 * knows about objects something happened to.
++	 *
++	 * Not folded into .info on purpose. .info is written twice in append mode (Main.java:121
++	 * and :140 upstream) and parsing it is already fragile; this file is written once,
++	 * truncating, and sorted, so it is deterministic and joinable on (method, bci, objectType).
++	 */
++	static void printReasons(Map<SootMethod, PointsToGraph> ptgs,
++							 Map<SootMethod, HashMap<ObjectNode, EscapeStatus>> resolved,
++							 String ipDir, String opDir) {
++		Path p_ipDir = Paths.get(ipDir);
++		Path p_opFile = Paths.get(opDir + "/" + p_ipDir.getFileName() + ".reasons");
++
++		List<String> lines = new ArrayList<>();
++		int objects = 0, withReason = 0;
++		for (SootMethod method : ptgs.keySet()) {
++			HashMap<ObjectNode, EscapeStatus> summary = resolved.get(method);
++			if (summary == null) continue;
++			for (ObjectNode obj : summary.keySet()) {
++				EnumSet<EscapeReason> rs = EscapeReasons.get(method, obj);
++				StringBuilder sb = new StringBuilder();
++				boolean first = true;
++				for (EscapeReason r : rs) {          // EnumSet iterates in declaration order
++					if (!first) sb.append(",");
++					sb.append(r.name());
++					first = false;
++				}
++				lines.add(method.toString() + "\t" + obj.ref + "\t" + obj.type.toString()
++						+ "\t" + sb.toString());
++				objects++;
++				if (!rs.isEmpty()) withReason++;
++			}
++		}
++		Collections.sort(lines);
++
++		StringBuilder out = new StringBuilder();
++		for (String l : lines) out.append(l).append("\n");
++		try {
++			System.out.println("Trying to write to:" + p_opFile);
++			Files.write(p_opFile, out.toString().getBytes(StandardCharsets.UTF_8),
++					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
++					StandardOpenOption.WRITE);
++			System.out.println("Reasons have been written: " + objects + " objects, "
++					+ withReason + " with at least one reason, "
++					+ EscapeReasons.nullMethodDrops.get() + " attributions dropped for a null method.");
++		} catch (IOException e) {
++			System.out.println("There is an exception" + e);
++			e.printStackTrace();
++		}
++	}
+ 
+ 	static void saveStats(Map<SootMethod, HashMap<ObjectNode, EscapeStatus>> unresolved,
+ 						  Map<SootMethod, HashMap<ObjectNode, EscapeStatus>>resolved,
+diff -ruN a/src/ptg/PointsToGraph.java b/src/ptg/PointsToGraph.java
+--- a/src/ptg/PointsToGraph.java	2026-09-02 00:11:37.186568100 +0530
++++ b/src/ptg/PointsToGraph.java	2026-09-02 00:11:37.297541600 +0530
+@@ -1,6 +1,8 @@
+ package ptg;
+ 
+ import es.ConditionalValue;
++import es.EscapeReason;
++import es.EscapeReasons;
+ import es.EscapeStatus;
+ import soot.Local;
+ import soot.SootField;
+@@ -11,6 +13,14 @@
+ 	public Map<Local, Set<ObjectNode>> vars = null;
+ 	public Map<ObjectNode, Map<SootField, Set<ObjectNode>>> fields = null;
+ 
++	/*
++	 * The method this graph belongs to. Set by StaticAnalyser.apply, which is the one place
++	 * that has both the SootMethod and the graph the handlers will mutate. It exists only so
++	 * the handlers can key EscapeReasons without every handler signature growing a SootMethod
++	 * parameter; nothing in the analysis reads it.
++	 */
++	public SootMethod method = null;
++
+ 	public PointsToGraph() {
+ 		vars = new HashMap<>();
+ 		fields = new HashMap<>();
+@@ -23,6 +33,7 @@
+ 
+ 	@SuppressWarnings("unchecked")
+ 	public PointsToGraph(PointsToGraph other) {
++		method = other.method;
+ 		vars = new HashMap<>(other.vars.size());
+ 		fields = new HashMap<>(other.fields.size());
+ 		for (Map.Entry<Local, Set<ObjectNode>> entry : other.vars.entrySet()) {
+@@ -368,25 +379,31 @@
+ 	}
+ 
+ 
+-	public void cascadeEscape(Local l, Map<ObjectNode, EscapeStatus> summary) {
++	/*
++	 * The EscapeReason argument is recorded, never read. It is required rather than
++	 * defaulted so that adding a new caller cannot silently produce an unattributed escape:
++	 * the compiler names every site.
++	 */
++	public void cascadeEscape(Local l, Map<ObjectNode, EscapeStatus> summary, EscapeReason reason) {
+ 		if (!vars.containsKey(l)) return;
+ 		HashSet<ObjectNode> done = new HashSet<>();
+ 		vars.get(l).forEach(object -> {
+-			recursiveCascadeEscape(object, summary, done);
++			recursiveCascadeEscape(object, summary, done, reason);
+ 			done.add(object);
+ 		});
+ 	}
+ 
+-	public void recursiveCascadeEscape(ObjectNode object, Map<ObjectNode, EscapeStatus> summary, HashSet<ObjectNode> done) {
++	public void recursiveCascadeEscape(ObjectNode object, Map<ObjectNode, EscapeStatus> summary, HashSet<ObjectNode> done, EscapeReason reason) {
+ 		if (done.contains(object)) return;
+ 		summary.get(object).setEscape();
++		EscapeReasons.record(method, object, reason);
+ 		done.add(object);
+ 		HashSet<ObjectNode> children = new HashSet<>();
+ 		if (fields.containsKey(object)) {
+ 			fields.get(object).forEach((field, objSet) -> children.addAll(objSet));
+ 		}
+ 		children.remove(object);
+-		children.forEach(child -> recursiveCascadeEscape(child, summary, done));
++		children.forEach(child -> recursiveCascadeEscape(child, summary, done, reason));
+ 	}
+ 
+ 	public void storeStmtArrayRef(Local lhs, Local rhs) {
+diff -ruN a/src/resolver/ReworkedResolver.java b/src/resolver/ReworkedResolver.java
+--- a/src/resolver/ReworkedResolver.java	2026-09-02 00:11:37.161677100 +0530
++++ b/src/resolver/ReworkedResolver.java	2026-09-02 00:11:37.257126300 +0530
+@@ -503,6 +503,19 @@
+             dfs2(u, used, component);
+             components.add(component);
+             // System.out.println("Compo:" + component);
++            /*
++             * collectReasons runs IMMEDIATELY BEFORE resolve, not after FindSCC returns.
++             * FindSCC is the resolution loop: resolve() mutates solvedSummaries for each
++             * component as it goes, in reverse topological order, and a later component's
++             * successor test reads results written by earlier ones. Evaluating the
++             * conditions after the whole loop would therefore test a different state than
++             * resolve() tested and would report TRANSITIVE_SUCCESSOR for nearly everything.
++             * Here the state is exactly the state resolve() is about to see.
++             *
++             * It never calls SetComponent and never writes solvedSummaries, which is what
++             * keeps constraint 1 checkable by diffing .res.
++             */
++            collectReasons(component);
+             resolve(component);
+         }
+     }
+@@ -702,6 +715,104 @@
+         SetComponent(component, NoEscape.getInstance());
+     }
+ 
++    /*
++     * Stamp a set of reasons onto EVERY member of the component, not only the member the
++     * condition fired on.
++     *
++     * This mirrors resolve() exactly: when any member fires, resolve() calls
++     * SetComponent(component, Escape) and the WHOLE component escapes. Attributing the reason
++     * only to the firing member leaves the other members Escape with an empty reason set,
++     * which is both false (they do escape) and useless (it names no fix). Measured on M02
++     * under MarkStoreEscaping=false before this was changed: 3 of 7 objects came back Escape
++     * with no reason, because their component's reason had fired on a callee PARAMETER node
++     * in a different method.
++     *
++     * It is also the reading the actionability question wants. "Which single fix unlocks this
++     * object" is answered by the reason that escaped its component, not by silence.
++     *
++     * Called ONCE per component, with the union, rather than once per firing. Stamping on each
++     * firing is O(|component|) inside a loop over the component and its successors, which is
++     * quadratic in component size; the JDK half of a benchmark run has components large enough
++     * for that to matter. The result is identical either way, because every stamp goes to
++     * every member and the side map is a set.
++     */
++    private void stampComponent(List<StandardObject> component, EnumSet<EscapeReason> rs) {
++        if (rs.isEmpty()) return;
++        for (StandardObject s : component)
++            for (EscapeReason r : rs)
++                EscapeReasons.record(s.getMethod(), s.getObject(), r);
++    }
++
++    /*
++     * The non-short-circuiting twin of resolve().
++     *
++     * resolve() returns at the first firing condition (:652, :657, :668, :690), so at most one
++     * resolver reason per component is ever observable from the outside. This evaluates all
++     * four, for every member of the component, and records which fired. It writes only to the
++     * EscapeReasons side map: it never calls SetComponent and never touches solvedSummaries,
++     * which is what keeps constraint 1 checkable by diffing .res.
++     *
++     * It runs immediately BEFORE resolve() for each component, from inside FindSCC, not after
++     * FindSCC returns. FindSCC *is* the resolution loop: resolve() mutates solvedSummaries per
++     * component in reverse topological order and a later component's successor test reads what
++     * earlier ones wrote. Evaluating after the loop would test a different state and would
++     * report TRANSITIVE_SUCCESSOR for nearly everything.
++     *
++     * isEscapingObject(sobj) is decomposed rather than called, because it folds together three
++     * different things: the method is in noBCIMethods (a surrender), the object already
++     * escapes from the intraprocedural pass (attributed at its handler site, and carried to
++     * the rest of the component here), and isAssignedToThis.
++     *
++     * Together those give the invariant the downstream integrity check relies on: a non-empty
++     * reason set implies Escape, and Escape implies a non-empty reason set.
++     */
++    void collectReasons(List<StandardObject> component) {
++        EnumSet<EscapeReason> fired = EnumSet.noneOf(EscapeReason.class);
++
++        for (StandardObject sobj : component) {
++
++            if (isReturnObject(sobj))
++                fired.add(EscapeReason.RETURNED);
++
++            if (this.noBCIMethods.contains(sobj.getMethod()))
++                fired.add(EscapeReason.NO_BCI_METHOD_AT_RESOLVER);
++
++            HashMap<ObjectNode, EscapeStatus> ess = this.solvedSummaries.get(sobj.getMethod());
++            EscapeStatus sobjEs = (ess == null) ? null : ess.get(sobj.getObject());
++            if (sobjEs != null && sobjEs.doesEscape())
++                fired.addAll(EscapeReasons.get(sobj.getMethod(), sobj.getObject()));
++
++            if (isAssignedToThis(sobj))
++                fired.add(EscapeReason.ASSIGNED_TO_THIS_OR_PARAM);
++
++            if (StoreEscape.MarkParamReturnEscaping == false
++                    && sobj.getObject().type == ObjectType.parameter) {
++                if (isEscapingParam(sobj))
++                    fired.add(EscapeReason.PARAM_ESCAPES_VIA_SUCCESSOR);
++                // resolve() continues here too, so the successor scan below is not reached
++                continue;
++            }
++
++            Set<StandardObject> succs = this.graph.get(sobj);
++            if (succs == null)
++                continue;
++            for (StandardObject nxt : succs) {
++                try {
++                    if (StoreEscape.MarkParamReturnEscaping == false
++                            && isReturnedFromDifferentFunction(sobj, nxt))
++                        continue;
++                    if (isEscapingObject(nxt))
++                        fired.add(EscapeReason.TRANSITIVE_SUCCESSOR);
++                }
++                catch (Exception e) {
++                    // same swallow as resolve(), for the same reason: a missing summary
++                }
++            }
++        }
++
++        stampComponent(component, fired);
++    }
++
+     void SetComponent ( List<StandardObject> comp, EscapeState es) {
+         System.err.println("comp:"+comp+" : "+es);
+         for (StandardObject s: comp) {
+diff -ruN a/src/utils/KillCallerOnly.java b/src/utils/KillCallerOnly.java
+--- a/src/utils/KillCallerOnly.java	2026-09-02 00:11:37.150571100 +0530
++++ b/src/utils/KillCallerOnly.java	2026-09-02 00:11:37.273514800 +0530
+@@ -1,5 +1,7 @@
+ package utils;
+ 
++import es.EscapeReason;
++import es.EscapeReasons;
+ import es.EscapeStatus;
+ import ptg.ObjectNode;
+ import soot.SootMethod;
+@@ -21,7 +23,10 @@
+ 			for (Map.Entry<ObjectNode, EscapeStatus> e : map.entrySet()) {
+ 				ObjectNode obj = e.getKey();
+ 				EscapeStatus es = e.getValue();
+-				q.put(obj, (es.isCallerOnly()) ? getEscape() : es);
++				boolean callerOnly = es.isCallerOnly();
++				if (callerOnly)
++					EscapeReasons.record(method, obj, EscapeReason.CALLER_ONLY_UNRESOLVABLE);
++				q.put(obj, callerOnly ? getEscape() : es);
+ 			}
+ 			_ret.put(method, q);
+ 		}

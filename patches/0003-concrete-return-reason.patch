@@ -1,0 +1,164 @@
+Subject: [PATCH 3/3] resolver: attribute RETURNED to the concrete object, not the return slot
+
+APPLIES ON TOP OF 0002-escape-reasons.patch. Two files:
+
+  resolver/ReworkedResolver  new static stampReturned(resolved), ~20 lines of code.
+  main/Main                  calls it after resolution, before printReasons.
+
+WHY
+---
+RETURNED is recorded in exactly one place today, ReworkedResolver.collectReasons, and only
+on a <returnValue,0> StandardObject. That node exists only if the return's conditional
+value survived into the summary, and usually it does not:
+
+    setAsReturn -> cascadeCV -> EscapeStatus.addEscapeState(cv) -> purge()
+
+    public void purge() {
+        if (containsCV()) {
+            if (doesEscape()) purgeAndEscape();      // <- the CV is deleted here
+            else if (containsNoEscape()) status.remove(NoEscape.getInstance());
+        }
+    }
+
+The CV survives if and only if the object had NOT already escaped, so the reason is
+destroyed exactly when the multiplicity would have exceeded one. Measured before this
+patch:
+
+  * corpus/E09, which is returned AND stored to a static AND used as a monitor, reported
+    two reasons rather than three. Its summary is {<internal,0>=[Escape]} with no CV at
+    all, and the program has zero <returnValue,0> nodes.
+  * across avrora, xalan, luindex, fop, h2 and pmd, 87,083 objects carry RETURNED and
+    there is exactly ONE distinct reason set containing it: {RETURNED}.
+
+The <returnValue,0> node is also not a heap object. It is one return slot per method, and
+under the reported population filter (internal + external) it is not counted at all, which
+is why RETURNED appeared in no figure.
+
+WHERE THE INFORMATION SURVIVES
+------------------------------
+JReturnStmtHandler.returnedObjects is populated at the return statement itself, from
+ptg.vars, and is a plain map rather than an EscapeState. purge() cannot reach it. So the
+set of returned objects survives even for objects whose CV -- and whose dependency edge --
+was destroyed. ReworkedResolver already reads that map at :340; this adds a second reader.
+
+WHY AFTER RESOLUTION AND NOT AT THE RETURN SITE
+-----------------------------------------------
+The obvious placement is PointsToGraph.setAsReturn, which knows the concrete objects and
+runs before purge() can destroy anything. THAT WAS TRIED AND IS WRONG.
+
+"Flows to the return slot" does NOT imply Escape. Under MarkParamReturnEscaping == false a
+parameter that is merely returned does not escape -- isEscapingParam() explicitly skips
+return successors:
+
+    for (StandardObject nxt: this.graph.get(sobj)) {
+        if (isReturnObject(nxt)) continue;          // <- returning a param is not an escape
+        if (isEscapingObject(nxt)) return true;
+    }
+
+Recording at setAsReturn therefore put RETURNED on 560 NoEscape objects on avrora (465
+parameter, 95 external), breaking the invariant that a non-empty reason set implies Escape
+-- the invariant both integrity checks depend on. The earlier draft of this patch claimed
+soundness from "resolve() tests isReturnObject() first"; that test is on the <returnValue,0>
+node, not on the objects flowing into it, and the two are not the same claim.
+
+Running after resolution makes the doesEscape() guard exact.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+No EscapeStatus is constructed, mutated, or read beyond doesEscape(). No summary entry is
+written. The write goes only to the append-only EscapeReasons side map, which nothing in
+the analysis reads. The verdict is unchanged by construction, and the .res line-multiset
+check (constraint 1) is the test of that claim rather than an argument for it.
+
+It does not add an argument-side twin. "Passed as argument k to M" does NOT imply escape --
+it is exactly the conditional the dependency edge already encodes -- so recording it as an
+EscapeReason would put reasons on NoEscape objects, which is the same bug described above.
+The argument side stays a graph edge.
+
+EXPECTED EFFECT
+---------------
+  * E09 reaches three reasons: STATIC_FIELD_STORE, MONITOR, RETURNED.
+  * RETURNED stops being confined to {RETURNED} and starts co-occurring.
+  * RETURNED appears on internal/external objects, so it becomes visible under the
+    internal+external population without removing that filter.
+  * <returnValue,0> nodes keep their own RETURNED from collectReasons; this is additive.
+  * NoEscape-with-reasons must stay at its pre-patch value. That is the check that
+    distinguishes this patch from the setAsReturn version.
+
+diff -ruN a/src/main/Main.java b/src/main/Main.java
+--- a/src/main/Main.java	2026-09-08 11:06:49.655363300 +0530
++++ b/src/main/Main.java	2026-09-08 11:06:49.686406700 +0530
+@@ -159,6 +159,11 @@
+ 	
+ 			printResForJVM(sr.solvedSummaries, args[2], args[4]);
+ 
++			// Attribute RETURNED to the concrete objects now that the verdict is known.
++			// Must run after resolution and before printReasons; see the comment on
++			// ReworkedResolver.stampReturned for why it cannot be done at the return site.
++			ReworkedResolver.stampReturned(resolved);
++
+ 			printReasons(StaticAnalyser.ptgs, resolved, args[2], args[4]);
+ 		}
+ 		else {
+diff -ruN a/src/resolver/ReworkedResolver.java b/src/resolver/ReworkedResolver.java
+--- a/src/resolver/ReworkedResolver.java	2026-09-08 11:06:49.715159600 +0530
++++ b/src/resolver/ReworkedResolver.java	2026-09-08 11:06:49.745120300 +0530
+@@ -820,4 +820,57 @@
+                 this.solvedSummaries.get(s.getMethod()).put(s.getObject(), new EscapeStatus(es));
+         }
+     }
++
++    /*
++     * stampReturned - attribute RETURNED to the CONCRETE object, after resolution.
++     *
++     * WHY IT IS NEEDED AT ALL
++     * Today RETURNED is recorded only by collectReasons, and only on a <returnValue,0>
++     * StandardObject. That node exists only if the return's conditional value survived into
++     * the summary, and EscapeStatus.purge() deletes the CV outright whenever the object was
++     * already escaping:
++     *
++     *     if (containsCV()) { if (doesEscape()) purgeAndEscape(); ... }
++     *
++     * So the reason is destroyed exactly when the multiplicity would have exceeded one.
++     * corpus/E09 - returned AND stored to a static AND used as a monitor - reported two
++     * reasons instead of three, and across six benchmarks RETURNED occurred in exactly one
++     * distinct reason set, {RETURNED}.
++     *
++     * WHY IT IS DONE HERE AND NOT AT THE RETURN STATEMENT
++     * The obvious place is PointsToGraph.setAsReturn, which knows the concrete objects and
++     * runs before purge() can destroy anything. That was tried and is WRONG: "flows to the
++     * return slot" does not imply Escape. Under MarkParamReturnEscaping == false a parameter
++     * that is merely returned does not escape - isEscapingParam() explicitly skips return
++     * successors - so recording there put RETURNED on 560 NoEscape objects on avrora (465
++     * parameter, 95 external), breaking the invariant that a non-empty reason set implies
++     * Escape.
++     *
++     * Here the verdict is known, so the doesEscape() guard makes the attribution exact.
++     *
++     * WHY IT STILL WORKS WHEN THE CV WAS PURGED
++     * JReturnStmtHandler.returnedObjects is populated at the return statement itself, from
++     * ptg.vars, and is not an EscapeState. purge() cannot reach it. So the set of returned
++     * objects survives even for the objects whose CV - and whose dependency edge - was
++     * destroyed.
++     *
++     * WHAT IT DOES NOT CHANGE
++     * No EscapeStatus is constructed, mutated or read beyond doesEscape(); no summary entry
++     * is written. The write goes only to the append-only EscapeReasons side map, which
++     * nothing in the analysis reads. The verdict is unchanged by construction, and the .res
++     * line-multiset diff is the test of that rather than the argument for it.
++     */
++    public static void stampReturned(Map<SootMethod, HashMap<ObjectNode, EscapeStatus>> resolved) {
++        if (resolved == null) return;
++        for (Map.Entry<SootMethod, HashSet<ObjectNode>> e
++                : JReturnStmtHandler.returnedObjects.entrySet()) {
++            HashMap<ObjectNode, EscapeStatus> summary = resolved.get(e.getKey());
++            if (summary == null || e.getValue() == null) continue;
++            for (ObjectNode o : e.getValue()) {
++                EscapeStatus es = summary.get(o);
++                if (es != null && es.doesEscape())
++                    EscapeReasons.record(e.getKey(), o, EscapeReason.RETURNED);
++            }
++        }
++    }
+ }
+\ No newline at end of file

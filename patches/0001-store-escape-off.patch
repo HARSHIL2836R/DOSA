@@ -1,0 +1,78 @@
+Subject: [PATCH 1/1] config: turn MarkStoreEscaping off so the PYE Store rule runs
+
+WHAT THIS CHANGES
+-----------------
+One boolean, in one file: config/StoreEscape.MarkStoreEscaping, true -> false.
+
+WHY
+---
+With MarkStoreEscaping = true (the value in the upstream checkout),
+handlers/JAssignStmt/StoreStmt.java:37 short-circuits every field store:
+
+    if (StoreEscape.MarkStoreEscaping) {
+        if (rhs instanceof Local) { ptg.cascadeEscape((Local)rhs, summary); return; }
+    }
+
+That `return` is taken BEFORE storeStmt() is reached, so for every `a.f = b`:
+
+  * b, and everything reachable from b, is set to Escape
+    (cascadeEscape -> recursiveCascadeEscape -> EscapeStatus.setEscape());
+  * no PTG field edge is built - STRONG_makeField / WEAK_makeField never run,
+    so the `Fields:` map in every .info file stays empty;
+  * no PYE Store-rule conditional value is created - propagateES never runs;
+  * b's existing conditional values are DISCARDED, because setEscape() calls
+    purgeAndEscape(), which replaces the whole status set with {Escape}.
+
+The net effect is that the Store rule described in Clustering-Design 1.2 - the
+first of the three places dependency edges are said to be created - is dead code
+in the shipped configuration. The containment edges this project set out to draw
+do not exist while the flag is true.
+
+Corroboration, from output already checked in to the upstream repo. stava/tests/test1
+is `A.n=B; B.n=C; C.n=D; D.n=B`, four `new Node()` at BCI 0/8/16/24. In
+stava/out/test1/Main.info:
+
+    Fields:{}
+    {<internal,24>=[Escape], <internal,8>=[Escape],
+     <internal,0>=[NoEscape], <internal,16>=[Escape]}
+
+A is the only object that never appears as a store RHS, and the only NoEscape.
+Nothing in test1 escapes in reality.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+Nothing else. ReduceParamDependence and MarkParamReturnEscaping keep their
+upstream values (true and false). No handler, no resolver, no output format.
+Objects that escape for a real reason - store to a static field, escape by
+return, store into a field of a parameter, argument to an unavailable callee -
+still escape, via their own rules. This flag governs only the blanket
+"any field store escapes" over-approximation.
+
+HOW IT IS APPLIED
+-----------------
+NEVER to stava/. The Makefile copies stava/src to heapviz/build/stava-src-pye/
+and applies this patch to the copy:
+
+    cp -r ../stava/src build/stava-src-pye
+    (cd build/stava-src-pye/.. && patch -p1 -d stava-src-pye/.. < patches/0001-store-escape-off.patch)
+
+The unpatched configuration is built from stava/src directly, compiled to a
+separate output directory, so both configurations can be run over the same
+corpus in the same session without either touching the reference checkout.
+
+Figures produced from the patched build are captioned `MarkStoreEscaping=false
+(patched)`; figures from the unpatched build are captioned
+`MarkStoreEscaping=true (upstream default)`. No figure is published without one
+of those two labels.
+
+--- a/src/config/StoreEscape.java
++++ b/src/config/StoreEscape.java
+@@ -1,7 +1,7 @@
+ package config;
+
+ public class StoreEscape {
+-    public static boolean MarkStoreEscaping = true;
++    public static boolean MarkStoreEscaping = false;
+     public static boolean ReduceParamDependence = true;
+     public static boolean MarkParamReturnEscaping = false;
+ }
