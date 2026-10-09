@@ -9,3 +9,7 @@ out/
 # Python bytecode
 __pycache__/
 *.pyc
+
+
+.dot
+.svg
