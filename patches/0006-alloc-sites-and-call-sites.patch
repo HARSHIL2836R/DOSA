@@ -1,0 +1,461 @@
+Subject: [PATCH 6/6] points-to: which allocation sites each object may be, and each call's arguments
+
+APPLIES ON TOP OF 0005-own-vs-inherited.patch. Four files, two of them new:
+
+  main/AllocSites     new: writes <dirname>.alloc and <dirname>.allocsets from Spark's PAG.
+  main/CallSites      new: writes <dirname>.cg, each call edge with the caller's argument objects.
+  main/CHATransform   keeps a reference to Spark's points-to analysis (see WHY IT KEEPS THE PAG).
+  main/Main           calls the two printers after printReasons.
+
+WHY
+---
+Stava keys an object by (method, bci, objectType), and a call result or a field read is a fresh
+`external` node in every method that sees it. The reason figures therefore counted about 4.24
+nodes per allocation site on avrora (Viz-Faithfulness-Audit O1), and the decision taken there was
+to count allocation sites. Stava's own data cannot join an external back to its allocation for
+field reads at all (41 % of avrora's externals): it has no interprocedural heap. Spark already
+runs on every Stava invocation and is allocation-site based, so this asks Spark (fix F4).
+
+The fork's capture-level walk (OwnershipResolverKavya2) returns up the call stack through the
+call site it came down, using a call-site bci that the fork added to its conditional values.
+Upstream's conditional values carry none. .cg gives a walk over upstream's summaries the call
+sites and each site's argument objects instead (tools/capture_level.py).
+
+OUTPUT
+------
+  .alloc      <method>\t<bci>\t<objectType>\t<KIND>\t<SET>, one line per internal and external
+              object in the resolved summaries, sorted. KIND is NEW (the object is an allocation
+              site), PTS (SET is Spark's set at the defining unit: a call's return nodes over its
+              call-graph targets, a field read's field, an array read's element), CONST, CAUGHT
+              (bci -1), NOBCI (bci -2), UNREACHABLE (not in Spark's reachable methods) or NOUNIT.
+  .allocsets  <SET>\t<site>;<site>;... with a site as <method>|<bci>|<type>, joining onto
+              .reasons as (method, bci, internal), or a token for a node Spark made up
+              (@STRING, @CLASS:, @MERGED: for Spark's merged StringBuilder/StringBuffer node,
+              @SPECIAL:, @NOUNIT:, @NORET:, @NOEDGE). Sets interned, numbered by first appearance.
+  .cg         <caller>\t<call bci>\t<callee>\t<k>=<obj>|<obj> ..., every call-graph edge between
+              two analysed methods; k = -1 is the receiver.
+
+The set is taken at the defining unit, not at the local, because Jimple packs locals: a packed
+local's set is the union over every definition that reuses it.
+
+WHY IT KEEPS THE PAG
+--------------------
+Scene.modifyHierarchy() sets the Scene's points-to analysis to null whenever a class is added,
+and classes are still being added while the body packs run. By the time Main prints, Scene
+returns DumbPointerAnalysis. CHATransform runs in wjap, right after the call-graph pack, and now
+keeps the PAG it finds there. The PAG itself is not changed.
+
+WHAT IT DOES NOT CHANGE
+-----------------------
+Nothing is written into a summary, a PTG, or the call graph; the printers run after .res and
+.reasons are written and only read Spark's solved graph. The check is tools/verify_patch6.sh
+(corpus, both configurations) and tools/run_all_p6.sh (six benchmarks): .res line multiset
+identical to patch 0005, .reasons and .via byte-identical.
+
+diff -ruN a/src/main/AllocSites.java b/src/main/AllocSites.java
+--- a/src/main/AllocSites.java	1970-01-01 05:30:00.000000000 +0530
++++ b/src/main/AllocSites.java	2026-09-21 20:35:31.447192900 +0530
+@@ -0,0 +1,270 @@
++package main;
++
++import java.io.BufferedWriter;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.util.*;
++
++import es.EscapeStatus;
++import ptg.ObjectNode;
++import ptg.ObjectType;
++import ptg.PointsToGraph;
++import soot.*;
++import soot.jimple.*;
++import soot.jimple.spark.pag.AllocNode;
++import soot.jimple.spark.pag.LocalVarNode;
++import soot.jimple.spark.pag.Node;
++import soot.jimple.spark.pag.PAG;
++import soot.jimple.spark.pag.Parm;
++import soot.jimple.spark.sets.P2SetVisitor;
++import soot.jimple.spark.sets.PointsToSetInternal;
++import soot.jimple.toolkits.callgraph.CallGraph;
++import soot.jimple.toolkits.callgraph.Edge;
++import soot.jimple.toolkits.callgraph.ReachableMethods;
++import soot.tagkit.BytecodeOffsetTag;
++import soot.toolkits.scalar.Pair;
++
++/*
++ * Patch 0006: <dirname>.alloc and <dirname>.allocsets: for every internal and external object
++ * in the resolved summaries, the allocation sites Spark says it may be. Stava counts an object
++ * once per method it appears in (a call result or a field read is a fresh `external` in every
++ * method that sees it); this is what lets a consumer count allocation sites instead.
++ *
++ *   .alloc      <method signature>\t<bci>\t<objectType>\t<KIND>\t<SET>
++ *   .allocsets  <SET>\t<site>;<site>;...
++ *
++ * KIND  NEW          the object is an allocation site itself: new, newarray or multianewarray
++ *                    at its bci. SET holds just that site.
++ *       PTS          SET is Spark's points-to set of the value the object stands for, taken at
++ *                    the defining unit, not at the local (Jimple packs locals, and a packed
++ *                    local's set is the union over every definition): a call's return nodes
++ *                    over its call-graph targets, a field read's field, an array read's element.
++ *       CONST        a string or class constant.
++ *       CAUGHT       bci -1 external: the exception bound by a catch handler.
++ *       NOBCI        bci -2: Stava could not read a bytecode offset for the object.
++ *       UNREACHABLE  the method is not reachable in Spark's call graph, so Spark has no nodes
++ *                    for it and the set would be empty for that reason alone.
++ *       NOUNIT       no unit at this bci defines a value the way Stava creates this object.
++ * An empty SET field means Spark's set is empty.
++ *
++ * A site is <method signature>|<bci>|<type> when Spark's allocation node is an expression in a
++ * method body whose unit is found, joining onto the first three .reasons columns as
++ * (method, bci, internal). Otherwise it is a token:
++ *     @STRING          all string constants (Spark's default string-constants:false)
++ *     @CLASS:<name>    a class constant
++ *     @MERGED:<type>   every StringBuffer/StringBuilder site (Spark's default merge-stringbuffer)
++ *     @SPECIAL:<node>  a node Spark invents: main thread, default class loader, and so on
++ *     @NOUNIT:<method> an allocation node whose unit was not found in its method
++ *     @NORET:<method>  a call target with no return node in the PAG (phantom, no body)
++ *     @NOEDGE          a call with no call-graph edge out of it
++ *
++ * A token can contain the ';' separator (a class constant's descriptor, @CLASS:[Ljava/lang/String;),
++ * so a reader rejoins a piece that is neither a token nor a site onto the token before it
++ * (extract/alloc_sites.read_alloc).
++ *
++ * Sets are interned like the .via groups and numbered by first appearance in the sorted
++ * .alloc, so both files are deterministic. Nothing here feeds back into the analysis: it runs
++ * after .res and .reasons are written and only reads Spark's already-solved graph.
++ */
++public class AllocSites {
++
++	private static final Map<SootMethod, Map<Integer, List<Unit>>> unitsByBci = new HashMap<>();
++	private static final Map<SootMethod, IdentityHashMap<Object, Unit>> allocUnits = new HashMap<>();
++	private static final Map<AllocNode, String> siteNames = new HashMap<>();
++
++	/** getBCI.get without the warning it prints for untagged units; same answer otherwise. */
++	static Integer bciOf(Unit u) {
++		for (ValueBox ub : u.getUseBoxes()) {
++			if (!ub.getClass().toString().equals("class soot.jimple.internal.JAssignStmt$LinkedRValueBox"))
++				continue;
++			Value v = ub.getValue();
++			if (!(v instanceof NewArrayExpr || v instanceof NewMultiArrayExpr)) continue;
++			BytecodeOffsetTag tg = (BytecodeOffsetTag) ub.getTag("BytecodeOffsetTag");
++			if (tg != null) return tg.getBytecodeOffset();
++		}
++		BytecodeOffsetTag t = (BytecodeOffsetTag) u.getTag("BytecodeOffsetTag");
++		return t == null ? null : t.getBytecodeOffset();
++	}
++
++	static Map<Integer, List<Unit>> byBci(SootMethod m) {
++		Map<Integer, List<Unit>> r = unitsByBci.get(m);
++		if (r != null) return r;
++		r = new HashMap<>();
++		if (m.hasActiveBody()) {
++			for (Unit u : m.getActiveBody().getUnits()) {
++				Integer b = bciOf(u);
++				if (b != null) r.computeIfAbsent(b, k -> new ArrayList<>()).add(u);
++			}
++		}
++		unitsByBci.put(m, r);
++		return r;
++	}
++
++	static Unit allocUnit(SootMethod m, Object newExpr) {
++		IdentityHashMap<Object, Unit> r = allocUnits.get(m);
++		if (r == null) {
++			r = new IdentityHashMap<>();
++			if (m.hasActiveBody()) {
++				for (Unit u : m.getActiveBody().getUnits()) {
++					if (!(u instanceof AssignStmt)) continue;
++					Value rhs = ((AssignStmt) u).getRightOp();
++					if (rhs instanceof AnyNewExpr) r.put(rhs, u);
++				}
++			}
++			allocUnits.put(m, r);
++		}
++		return r.get(newExpr);
++	}
++
++	static String siteName(AllocNode an) {
++		String s = siteNames.get(an);
++		if (s != null) return s;
++		Object e = an.getNewExpr();
++		if (e instanceof Pair) e = ((Pair<?, ?>) e).getO1();   // inner dimension of a multianewarray
++		SootMethod m = an.getMethod();
++		if (e == PointsToAnalysis.STRING_NODE) s = "@STRING";
++		else if (e instanceof ClassConstant) s = "@CLASS:" + ((ClassConstant) e).getValue();
++		else if (e instanceof Type) s = "@MERGED:" + e;
++		else if (m == null) s = "@SPECIAL:" + e;
++		else {
++			Unit u = allocUnit(m, e);
++			Integer b = u == null ? null : bciOf(u);
++			s = b == null ? "@NOUNIT:" + m : m + "|" + b + "|" + an.getType();
++		}
++		siteNames.put(an, s);
++		return s;
++	}
++
++	static void addAll(PointsToSet pts, Set<String> out) {
++		if (!(pts instanceof PointsToSetInternal)) return;
++		((PointsToSetInternal) pts).forall(new P2SetVisitor() {
++			@Override
++			public void visit(Node n) {
++				if (n instanceof AllocNode) out.add(siteName((AllocNode) n));
++			}
++		});
++	}
++
++	/** Returns the KIND; fills out with the sites. */
++	static String query(SootMethod m, ObjectNode o, PAG pag, CallGraph cg, ReachableMethods rm,
++						Set<String> out) {
++		if (o.ref == -2) return "NOBCI";
++		if (o.type == ObjectType.external && o.ref == -1) return "CAUGHT";
++		List<Unit> units = byBci(m).get(o.ref);
++		if (units == null) return "NOUNIT";
++		boolean isNew = false, isConst = false, isPts = false;
++		for (Unit u : units) {
++			if (!(u instanceof AssignStmt)) continue;
++			AssignStmt as = (AssignStmt) u;
++			Value lhs = as.getLeftOp(), rhs = as.getRightOp();
++			if (o.type == ObjectType.internal && rhs instanceof AnyNewExpr) {
++				isNew = true;
++				out.add(m + "|" + o.ref + "|" + rhs.getType());
++			} else if (o.type == ObjectType.internal
++					&& (rhs instanceof StringConstant || rhs instanceof ClassConstant)) {
++				isConst = true;       // `x = "s"` and also a store of a constant, `r.f = "s"`
++			} else if (!(lhs instanceof Local)) {
++				continue;
++			} else if (rhs instanceof ArrayRef) {
++				isPts = true;         // external, or the internal child of a local array
++				addAll(pag.reachingObjectsOfArrayElement(
++						pag.reachingObjects((Local) ((ArrayRef) rhs).getBase())), out);
++			} else if (o.type != ObjectType.external) {
++				continue;
++			} else if (rhs instanceof InvokeExpr) {
++				isPts = true;
++				Iterator<Edge> it = cg.edgesOutOf(u);
++				if (!it.hasNext()) out.add("@NOEDGE");
++				while (it.hasNext()) {
++					SootMethod tgt = it.next().tgt();
++					LocalVarNode rn = pag.findLocalVarNode(Parm.v(tgt, PointsToAnalysis.RETURN_NODE));
++					if (rn == null) out.add("@NORET:" + tgt);
++					else addAll(rn.getP2Set(), out);
++				}
++			} else if (rhs instanceof InstanceFieldRef) {
++				isPts = true;
++				InstanceFieldRef fr = (InstanceFieldRef) rhs;
++				addAll(pag.reachingObjects((Local) fr.getBase(), fr.getField()), out);
++			} else if (rhs instanceof StaticFieldRef) {
++				isPts = true;
++				addAll(pag.reachingObjects(((StaticFieldRef) rhs).getField()), out);
++			}
++		}
++		if (isNew) return "NEW";
++		if (isPts) return rm.contains(m) ? "PTS" : "UNREACHABLE";
++		if (isConst) return "CONST";
++		return "NOUNIT";
++	}
++
++	static void print(Map<SootMethod, PointsToGraph> ptgs,
++					  Map<SootMethod, HashMap<ObjectNode, EscapeStatus>> resolved,
++					  String ipDir, String opDir) {
++		PointsToAnalysis pta = CHATransform.getSparkPta();
++		if (pta == null) pta = Scene.v().getPointsToAnalysis();
++		if (!(pta instanceof PAG)) {
++			System.out.println("Allocation sites not written: the points-to analysis is "
++					+ pta.getClass().getName() + ", not Spark's PAG");
++			return;
++		}
++		PAG pag = (PAG) pta;
++		CallGraph cg = Scene.v().getCallGraph();
++		ReachableMethods rm = Scene.v().getReachableMethods();
++
++		String name = Paths.get(ipDir).getFileName().toString();
++		Path pAlloc = Paths.get(opDir + "/" + name + ".alloc");
++		Path pSets = Paths.get(opDir + "/" + name + ".allocsets");
++
++		List<String[]> lines = new ArrayList<>();      // {key, kind, joined sorted sites}
++		Map<String, Integer> kinds = new TreeMap<>();
++		int maxSize = 0;
++		for (SootMethod method : ptgs.keySet()) {
++			HashMap<ObjectNode, EscapeStatus> summary = resolved.get(method);
++			if (summary == null) continue;
++			for (ObjectNode obj : summary.keySet()) {
++				if (obj.type != ObjectType.internal && obj.type != ObjectType.external) continue;
++				Set<String> sites = new TreeSet<>();
++				String kind;
++				try {
++					kind = query(method, obj, pag, cg, rm, sites);
++				} catch (RuntimeException e) {
++					kind = "ERROR";
++					sites.clear();
++					System.out.println("[AllocSites] " + method + " " + obj + ": " + e);
++				}
++				kinds.merge(kind, 1, Integer::sum);
++				maxSize = Math.max(maxSize, sites.size());
++				lines.add(new String[] {
++						method.toString() + "\t" + obj.ref + "\t" + obj.type.toString(),
++						kind, String.join(";", sites) });
++			}
++		}
++		lines.sort((a, b) -> a[0].compareTo(b[0]));
++
++		Map<String, Integer> setIds = new HashMap<>();
++		try (BufferedWriter a = Files.newBufferedWriter(pAlloc, StandardCharsets.UTF_8);
++			 BufferedWriter s = Files.newBufferedWriter(pSets, StandardCharsets.UTF_8)) {
++			for (String[] l : lines) {
++				String id = "";
++				if (!l[2].isEmpty()) {
++					Integer n = setIds.get(l[2]);
++					if (n == null) {
++						n = setIds.size();
++						setIds.put(l[2], n);
++						s.write(n + "\t" + l[2] + "\n");
++					}
++					id = Integer.toString(n);
++				}
++				a.write(l[0] + "\t" + l[1] + "\t" + id + "\n");
++			}
++			System.out.println("Allocation sites have been written: " + lines.size() + " objects "
++					+ kinds + ", " + setIds.size() + " distinct site sets, largest " + maxSize
++					+ " sites, " + siteNames.size() + " allocation nodes named.");
++		} catch (IOException e) {
++			System.out.println("There is an exception" + e);
++			e.printStackTrace();
++		}
++	}
++}
+diff -ruN a/src/main/CallSites.java b/src/main/CallSites.java
+--- a/src/main/CallSites.java	1970-01-01 05:30:00.000000000 +0530
++++ b/src/main/CallSites.java	2026-09-21 20:35:31.446184300 +0530
+@@ -0,0 +1,88 @@
++package main;
++
++import java.io.BufferedWriter;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.util.*;
++
++import ptg.ObjectNode;
++import ptg.PointsToGraph;
++import soot.*;
++import soot.jimple.InstanceInvokeExpr;
++import soot.jimple.InvokeExpr;
++import soot.jimple.Stmt;
++import soot.jimple.toolkits.callgraph.CallGraph;
++import soot.jimple.toolkits.callgraph.Edge;
++
++/*
++ * Patch 0006: <dirname>.cg: every call-graph edge between two analysed methods, with the objects
++ * the caller binds to each argument at that call.
++ *
++ *     <caller signature>\t<call bci>\t<callee signature>\t<k>=<obj>|<obj> <k>=<obj> ...
++ *
++ * k is -1 for the receiver and 0.. for the arguments; an <obj> prints as ObjectNode does,
++ * <type,ref>. The objects are the caller's PTG vars for the argument local, which is what the
++ * fork's capture-level walk reads (OwnershipResolverKavya2.GetArgObjects). An argument that is a
++ * constant or a primitive, or a local with no objects, is left out.
++ *
++ * Upstream conditional values do not carry a call-site bci (the fork added one), so this is what
++ * lets a walk up the call stack return to the call it came from, and see a caller's object even
++ * after purge() has deleted the conditional value that would otherwise lead to it.
++ */
++public class CallSites {
++
++	static void print(Map<SootMethod, PointsToGraph> ptgs, String ipDir, String opDir) {
++		CallGraph cg = Scene.v().getCallGraph();
++		String name = Paths.get(ipDir).getFileName().toString();
++		Path p = Paths.get(opDir + "/" + name + ".cg");
++		TreeSet<String> lines = new TreeSet<>();
++		int noBci = 0;
++		for (Map.Entry<SootMethod, PointsToGraph> en : ptgs.entrySet()) {
++			SootMethod src = en.getKey();
++			PointsToGraph ptg = en.getValue();
++			Iterator<Edge> it = cg.edgesOutOf(src);
++			while (it.hasNext()) {
++				Edge e = it.next();
++				SootMethod tgt = e.tgt();
++				Unit u = e.srcUnit();
++				if (u == null || !ptgs.containsKey(tgt)) continue;
++				Integer bci = AllocSites.bciOf(u);
++				if (bci == null) { noBci++; continue; }
++				StringBuilder args = new StringBuilder();
++				if (u instanceof Stmt && ((Stmt) u).containsInvokeExpr()) {
++					InvokeExpr ie = ((Stmt) u).getInvokeExpr();
++					if (ie instanceof InstanceInvokeExpr)
++						append(args, -1, ((InstanceInvokeExpr) ie).getBase(), ptg);
++					for (int k = 0; k < ie.getArgCount(); k++)
++						append(args, k, ie.getArg(k), ptg);
++				}
++				lines.add(src + "\t" + bci + "\t" + tgt + "\t" + args);
++			}
++		}
++		try (BufferedWriter w = Files.newBufferedWriter(p, StandardCharsets.UTF_8)) {
++			for (String l : lines) {
++				w.write(l);
++				w.write("\n");
++			}
++			System.out.println("Call sites have been written: " + lines.size()
++					+ " edges between analysed methods, " + noBci + " skipped for a missing bci.");
++		} catch (IOException ex) {
++			System.out.println("There is an exception" + ex);
++			ex.printStackTrace();
++		}
++	}
++
++	static void append(StringBuilder sb, int k, Value v, PointsToGraph ptg) {
++		if (!(v instanceof Local) || !(v.getType() instanceof RefLikeType)) return;
++		Set<ObjectNode> objs = ptg.vars == null ? null : ptg.vars.get(v);
++		if (objs == null || objs.isEmpty()) return;
++		List<String> s = new ArrayList<>();
++		for (ObjectNode o : objs) s.add(o.toString());
++		Collections.sort(s);
++		if (sb.length() > 0) sb.append(" ");
++		sb.append(k).append("=").append(String.join("|", s));
++	}
++}
+diff -ruN a/src/main/CHATransform.java b/src/main/CHATransform.java
+--- a/src/main/CHATransform.java	2026-09-21 20:35:31.290316300 +0530
++++ b/src/main/CHATransform.java	2026-09-21 20:35:31.440603300 +0530
+@@ -12,9 +12,13 @@
+ public class CHATransform extends SceneTransformer{
+     static CallGraph cha;
+     static CallGraph spark;
++    // Patch 0006: Spark's points-to graph, kept here because Scene.modifyHierarchy() drops it
++    // from the Scene as soon as a class is added later in the run (read by AllocSites).
++    static PointsToAnalysis sparkPta;
+     @Override
+     protected void internalTransform(String arg0, Map<String, String> arg1) {
+         spark = Scene.v().getCallGraph();
++        sparkPta = Scene.v().getPointsToAnalysis();
+         CallGraphBuilder cgg = new CallGraphBuilder(DumbPointerAnalysis.v());
+         cgg.build();
+         cha = cgg.getCallGraph();
+@@ -23,6 +27,9 @@
+     public static CallGraph getCHA() {
+         return cha;
+     }
++    public static PointsToAnalysis getSparkPta() {
++        return sparkPta;
++    }
+     public static CallGraph getSpark() {
+         return spark;
+     }
+diff -ruN a/src/main/Main.java b/src/main/Main.java
+--- a/src/main/Main.java	2026-09-21 20:35:31.287788900 +0530
++++ b/src/main/Main.java	2026-09-21 20:35:31.441603300 +0530
+@@ -165,6 +165,10 @@
+ 			ReworkedResolver.stampReturned(resolved);
+ 
+ 			printReasons(StaticAnalyser.ptgs, resolved, args[2], args[4]);
++
++			// Patch 0006: which allocation sites each object may be, from Spark. Read-only.
++			AllocSites.print(StaticAnalyser.ptgs, resolved, args[2], args[4]);
++			CallSites.print(StaticAnalyser.ptgs, args[2], args[4]);
+ 		}
+ 		else {
+ 			SummaryResolver sr = new SummaryResolver();
