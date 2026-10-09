@@ -96,13 +96,13 @@ for cfg in upstream pye; do
         REASON_ARGS="--require-reasons"
     fi
 
-    python3 "$DIR/extract/info_to_graph.py" --info-dir "$OUT" --classes $CLASSES \
+    python3 "$DIR/extract/python/info_to_graph.py" --info-dir "$OUT" --classes $CLASSES \
         --class-dir "$CLS" --javap "$JAVA_HOME_STAVA/bin/javap" \
         --config "$LABEL" --jdk "$JDK_LABEL" --definition S $REASON_ARGS \
         --out "$OUT/graph.json"
 
     for def in S C; do
-        python3 "$DIR/render/graph_to_svg.py" --graph "$OUT/graph.json" \
+        python3 "$DIR/render/python/graph_to_svg.py" --graph "$OUT/graph.json" \
             --definition "$def" ${FOCUS:+--focus "$FOCUS"} --hide-params \
             --title "$MAIN - equi-escape sets under definition $def ($LABEL)" \
             --svg "$DIR/render/figures/$MAIN-$cfg-$def.svg" \
@@ -110,10 +110,10 @@ for cfg in upstream pye; do
     done
 
     # interprocedural view: per-method PTGs stitched into one heap graph
-    python3 "$DIR/extract/interprocedural.py" --graph "$OUT/graph.json" \
+    python3 "$DIR/extract/python/interprocedural.py" --graph "$OUT/graph.json" \
         --out "$OUT/graph-interproc.json"
     for def in S C; do
-        python3 "$DIR/render/graph_to_svg.py" --graph "$OUT/graph-interproc.json" \
+        python3 "$DIR/render/python/graph_to_svg.py" --graph "$OUT/graph-interproc.json" \
             --definition "$def" \
             --title "$MAIN - interprocedural PTG, equi-escape set $def ($LABEL)" \
             --svg "$DIR/render/figures/$MAIN-$cfg-interproc-$def.svg" \
@@ -122,7 +122,7 @@ for cfg in upstream pye; do
 
     # the three escape-reason figures; skipped under USE_PATCH=1, which has no .reasons
     if [ "$USE_PATCH" != "1" ]; then
-        python3 "$DIR/render/reason_figures.py" --graph "$OUT/graph.json" \
+        python3 "$DIR/render/python/reason_figures.py" --graph "$OUT/graph.json" \
             --title "$MAIN ($LABEL)" \
             --out-prefix "$DIR/render/figures/$MAIN-$cfg-reason"
     fi
