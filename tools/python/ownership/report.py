@@ -24,7 +24,7 @@ import json
 import os
 import sys
 
-H = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+H = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 BENCH = [  # name, .own base name, class prefixes (as tools/scripts/run_all_p6.sh)
     ("avrora", "dacapo", ["avrora."]),

@@ -2,8 +2,7 @@
 
 Micro-corpus and static visualisation of Stava's escape-dependency graph.
 
-New code only. `../stava/` and `../Region-Based-Object-Allocation-in-Java/` are **reference
-checkouts and are never edited**. Anything Stava would have to change to emit what we need
+New code only. `../stava/` is a **reference checkout and is never edited**. Anything Stava would have to change to emit what we need
 lives in `patches/` as an unapplied `.patch` file, applied only to a throwaway copy of the
 source under `build/`.
 

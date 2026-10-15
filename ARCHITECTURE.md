@@ -19,7 +19,11 @@ heapviz/
 │
 ├── patches/              # Stava source patches
 │   ├── 0001-store-escape-off.patch
-│   └── 0002-escape-reasons.patch
+│   ├── 0002-escape-reasons.patch
+│   ├── 0003-concrete-return-reason.patch
+│   ├── 0004-successor-pointers.patch
+│   ├── 0005-own-vs-inherited.patch
+│   └── 0006-alloc-sites-and-call-sites.patch
 │
 ├── extract/              # Data extraction from Soot output
 │   └── python/
@@ -40,14 +44,19 @@ heapviz/
 │
 ├── tools/                # Analysis tools and ownership tree
 │   ├── java/
-│   │   └── heapviz/               # Core Java analysis engine (see §3)
-│   │       ├── OwnershipTree.java
-│   │       ├── OwnershipGraph.java
-│   │       ├── Dominators.java
-│   │       ├── OwnershipResult.java
-│   │       ├── IntList.java
-│   │       ├── IdentityReturns.java
-│   │       └── LibraryInliner.java
+│   │   └── heapviz/               # Core Java analysis engine (modularized; see §3)
+│   │       ├── OwnershipTree.java       # Orchestrator & CLI entry point (~350 lines)
+│   │       ├── GraphBuilder.java        # Graph B (borrow) & Graph N (naive) construction
+│   │       ├── ReturnAnalysis.java      # Parameter-return summary analysis
+│   │       ├── UnsafeStoreHandler.java  # sun.misc.Unsafe putObject modelling
+│   │       ├── Dominators.java          # Cooper-Harvey-Kennedy dominator tree solver
+│   │       ├── OwnershipGraph.java      # Edge accumulator & CSR graph representation
+│   │       ├── SiteNaming.java          # Spark node & allocation site naming
+│   │       ├── OutputWriter.java        # Output serialization (.own, .owntree, .ownwhy)
+│   │       ├── OwnershipResult.java     # Classification result container
+│   │       ├── IdentityReturns.java     # Fluent builder chain pre-rewrite
+│   │       ├── LibraryInliner.java      # Small JDK allocating method inlining
+│   │       └── IntList.java             # Unboxed growable int[]
 │   ├── python/                    # Python analysis scripts
 │   │   ├── alloc_unit.py          # Allocation-unit analysis
 │   │   ├── evidence_report.py     # Evidence report generation
@@ -127,29 +136,31 @@ flowchart TD
     E2 --> E3["Optional: LibraryInliner.inlineRound()"]
     E3 --> E4["Optional: Spark re-run"]
 
-    E4 --> F["OwnershipTree.run()"]
+    E4 --> F["OwnershipTree.run() (Orchestrator)"]
     F --> F1["1. number() — assign IDs to methods & sites"]
-    F --> F2["2. findUnsafeStores()"]
-    F --> F3["3. computeReturns() — return-parameter analysis"]
+    F --> F2["2. unsafeStores.findUnsafeStores()"]
+    F --> F3["3. returnAnalysis.computeReturns()"]
     F --> F4["4. methodSccs() — Tarjan SCC on call graph"]
 
     F --> G["Build Graph B (borrow rule)"]
-    G --> G1["common() — root, calls, statics, heap fields"]
-    G --> G2["borrowFrames() — new, calls, caught exceptions"]
-    G --> G3["freeze() → CSR format"]
+    G --> G1["builder.common(gb) — root, calls, statics, heap fields"]
+    G --> G2["builder.borrowFrames(gb) — new, calls, caught exceptions"]
+    G --> G3["gb.freeze() → CSR format"]
     G3 --> G4["Dominators.dominators() — Cooper-Harvey-Kennedy"]
-    G4 --> G5["classify() — OWN / UP / HEAP per site"]
-    G5 --> G6["attribute() — why each HEAP site is HEAP"]
+    G4 --> G5["classify(gb, 'B') — OWN / UP / HEAP per site"]
+    G5 --> G6["writer.attribute(gb, b) — why each HEAP site is HEAP"]
 
     F --> H["Build Graph N (naive baseline)"]
-    H --> H1["common()"]
-    H --> H2["naiveFrames() — every local → its pts"]
-    H --> H3["classify()"]
+    H --> H1["builder.common(gn)"]
+    H --> H2["builder.naiveFrames(gn) — every local → its pts"]
+    H --> H3["gn.freeze() → CSR format"]
+    H3 --> H4["Dominators.dominators()"]
+    H4 --> H5["classify(gn, 'N')"]
 
-    F --> I["Output"]
-    I --> I1[".own file (one line per site)"]
-    I --> I2[".owntree file (dominator chains)"]
-    I --> I3[".ownwhy file (HEAP attribution)"]
+    F --> I["Output (OutputWriter)"]
+    I --> I1["writer.writeOwn() → .own file"]
+    I --> I2["writer.writeTree() → .owntree file"]
+    I --> I3["writer.attribute() → .ownwhy file"]
 ```
 
 ### 2.3 Python CLI: `heapviz.py`
@@ -179,47 +190,55 @@ flowchart LR
 
 ### Core Classes (`tools/java/heapviz/`)
 
+`OwnershipTree.java` was modularized into a clean orchestrator (~350 lines) supported by 5 extracted single-responsibility classes:
+
 | Class | Lines | Responsibility |
 |-------|-------|---------------|
-| **OwnershipTree** | ~1050 | Main entry point and orchestrator. Runs Soot, numbers nodes, builds graphs, classifies sites, writes output. |
-| **OwnershipGraph** | ~70 | Edge accumulator with deduplication. Freezes into CSR (Compressed Sparse Row) format for fast traversal. |
-| **Dominators** | ~120 | Graph algorithms: Cooper-Harvey-Kennedy dominator tree, BFS domination check, witness path finder. |
-| **OwnershipResult** | ~18 | Data class holding classification results: `idom[]`, `cls[]`, `region[]`, `owner[]`, `up[]`, `rec[]`. |
-| **IntList** | ~12 | Growable `int[]` (like `ArrayList<Integer>` without boxing). |
-| **IdentityReturns** | ~130 | Rewrites `x = y.m()` → `y.m(); x = y` when every target returns exactly that argument. Reduces graph noise. |
-| **LibraryInliner** | ~220 | Copies JDK method bodies into the application's call graph so Spark can resolve their allocations. |
+| **OwnershipTree** | ~350 | Main entry point and orchestrator. Parses Soot/Spark CLI flags, assigns node IDs (`number()`), runs Tarjan SCC analysis on call graph (`methodSccs()`, `bfsFrom()`), runs domination check verification (`classify()`), and drives the pipeline (`run()`). |
+| **GraphBuilder** | ~315 | Builds graph edges: `common()` (ROOT, GLOBAL, entry points, async targets, call graph, statics, heap fields), `borrowFrames()` (Graph B borrow rule: `new`, calls returning non-parameter values, caught exceptions), and `naiveFrames()` (Graph N baseline). |
+| **OutputWriter** | ~220 | Formats and writes output files: `.own` (classifications), `.owntree` (dominator chains), `.ownwhy` (HEAP attribution witness paths), prints summaries (`summary()`), and handles what-if analysis (`whatIf()`). |
+| **ReturnAnalysis** | ~180 | Computes interprocedural return-parameter bitmasks (`computeReturns()`), determining whether methods return parameter-derived references or freshly allocated objects. |
+| **SiteNaming** | ~150 | Translates Spark `AllocNode` objects and integer node IDs into human-readable strings (`nodeName()`, `siteName()`, `isApp()`). |
+| **Dominators** | ~120 | Graph algorithms: Cooper-Harvey-Kennedy dominator tree computation (`dominators()`), BFS domination check (`dominates()`), and witness path finder (`witness()`). |
+| **IdentityReturns** | ~130 | Rewrites `x = y.m()` → `y.m(); x = y` when every target returns exactly that argument. Eliminates spurious return hubs (e.g. `StringBuilder.append`). |
+| **LibraryInliner** | ~220 | Copies small JDK method bodies into the application's call graph so Spark can resolve and differentiate their allocation sites. |
+| **UnsafeStoreHandler** | ~95 | Detects `sun.misc.Unsafe.putObject` calls (`findUnsafeStores()`) and models them as proxy heap edges so unsafe direct memory mutations do not escape ownership tracking. |
+| **OwnershipGraph** | ~70 | Edge accumulator with deduplication (`add()`). Sorts and compacts into CSR (Compressed Sparse Row) format (`freeze()`) for fast traversal. |
+| **OwnershipResult** | ~20 | Data class holding classification arrays: `idom[]`, `cls[]`, `region[]`, `owner[]`, `up[]`, `rec[]`. |
+| **IntList** | ~15 | Growable unboxed primitive `int[]` array (like `ArrayList<Integer>` without heap boxing). |
 
 ### Internal Flow of `OwnershipTree.run()`
 
 ```mermaid
 flowchart TD
     subgraph "Setup"
-        N["number()"] --> U["findUnsafeStores()"]
-        U --> CR["computeReturns()"]
-        CR --> SCC["methodSccs()"]
+        N["OwnershipTree.number()"] --> U["UnsafeStoreHandler.findUnsafeStores()"]
+        U --> CR["ReturnAnalysis.computeReturns()"]
+        CR --> SCC["OwnershipTree.methodSccs()"]
     end
 
     subgraph "Graph B — Borrow Rule"
-        SCC --> CB["common(gb)"]
-        CB --> BF["borrowFrames(gb)"]
-        BF --> FB["gb.freeze()"]
+        SCC --> CB["GraphBuilder.common(gb)"]
+        CB --> BF["GraphBuilder.borrowFrames(gb)"]
+        BF --> FB["gb.freeze() → CSR format"]
         FB --> DB["Dominators.dominators()"]
-        DB --> CLB["classify(gb, 'B')"]
-        CLB --> AB["attribute(gb, b)"]
+        DB --> CLB["OwnershipTree.classify(gb, 'B')"]
+        CLB --> AB["OutputWriter.attribute(gb, b)"]
     end
 
     subgraph "Graph N — Naive Baseline"
-        AB --> CN["common(gn)"]
-        CN --> NF["naiveFrames(gn)"]
-        NF --> FN["gn.freeze()"]
+        AB --> CN["GraphBuilder.common(gn)"]
+        CN --> NF["GraphBuilder.naiveFrames(gn)"]
+        NF --> FN["gn.freeze() → CSR format"]
         FN --> DN["Dominators.dominators()"]
-        DN --> CLN["classify(gn, 'N')"]
+        DN --> CLN["OwnershipTree.classify(gn, 'N')"]
     end
 
-    subgraph "Output"
-        CLN --> OWN[".own file"]
-        CLN --> TREE[".owntree file"]
-        AB --> WHY[".ownwhy file"]
+    subgraph "Output (OutputWriter)"
+        CLN --> OWN["writer.writeOwn() → .own file"]
+        CLN --> TREE["writer.writeTree() → .owntree file"]
+        AB --> WHY["writer.attribute() → .ownwhy file"]
+        CLN --> SUM["writer.summary() / whatIf()"]
     end
 ```
 

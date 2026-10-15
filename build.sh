@@ -7,8 +7,8 @@
 # cannot be (no sudo, no apt), so this script is what was actually run and is the artefact of
 # record. The Makefile is provided for hosts that have make.
 #
-# stava/ and Region-Based-Object-Allocation-in-Java/ are reference checkouts and are never
-# written to. Every Stava configuration is compiled from a copy under build/.
+# stava/ is a reference checkout and is never written to. Every Stava configuration
+# is compiled from a copy under build/.
 #
 # PHASE 11. The two configurations are now produced from ONE instrumented build and selected
 # at run time by argv[7] (MarkStoreEscaping), rather than from two separately patched source

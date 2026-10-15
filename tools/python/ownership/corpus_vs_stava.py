@@ -20,7 +20,7 @@ import glob
 import json
 import os
 
-H = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "build")
+H = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "build")
 
 
 def read_own(path):
@@ -55,7 +55,10 @@ def main():
             g = os.path.join(H, "out", prog + "-p6-false", "graph.json")
             if suffix or not os.path.exists(g):
                 continue
-            for n in json.load(open(g, encoding="utf-8"))["sites"]:
+            data = json.load(open(g, encoding="utf-8"))
+            for n in data.get("sites", data.get("nodes", [])):
+                if "bci" not in n or n["bci"] is None or "method" not in n or not n["method"]:
+                    continue
                 k = (n["method"], n["bci"])
                 if n.get("objType") != "site" or k not in own:
                     continue

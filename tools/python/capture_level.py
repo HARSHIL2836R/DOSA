@@ -4,8 +4,8 @@
     python3 tools/python/capture_level.py --run-dir /tmp/rv/p6out/avrora-false \
         --class-prefix avrora. --label "avrora false" [--cap 2] [--json out.json]
 
-A port of the fork's capture-level walk (Region-Based-Object-Allocation-in-Java,
-src/resolver/OwnershipResolverKavya2.java, object_capturing_level / resolve_escape_state) onto
+A port of the prior fork's capture-level walk
+(OwnershipResolverKavya2.java, object_capturing_level / resolve_escape_state) onto
 upstream Stava's pre-resolution summaries. Needs a patch-0006 run: the walk reads the call
 graph and each call's argument objects from <dirname>.cg.
 

@@ -145,9 +145,17 @@ class GraphBuilder {
 			for (AllocDotField f : an.getFields()) g.toSites(tree.sNode(an), f.getP2Set());
 		}
 		tree.unsafeStores.unsafeEdges(g);
+		boolean useScopeLca = Boolean.parseBoolean(System.getProperty("ownership.scopeLca", "true"));
 		for (VarNode v : tree.pag.getVarNodeNumberer()) {
-			if (v instanceof GlobalVarNode && v.getVariable() instanceof SootField)
-				global(g, "static:" + ((SootField) v.getVariable()).getSignature(), v.getP2Set());
+			if (v instanceof GlobalVarNode && v.getVariable() instanceof SootField) {
+				SootField sf = (SootField) v.getVariable();
+				SootMethod cap = useScopeLca ? tree.staticLiveness.getCapturingMethod(sf) : null;
+				if (cap != null) {
+					tree.staticLiveness.connectStatic(g, sf, cap, v.getP2Set());
+				} else {
+					global(g, "static:" + sf.getSignature(), v.getP2Set());
+				}
+			}
 		}
 		for (SootMethod m : tree.methods) {
 			if (!m.hasActiveBody()) continue;

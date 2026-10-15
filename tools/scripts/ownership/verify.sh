@@ -67,8 +67,8 @@ T3)
     ;;
 
 T4)
-    # the stored corpus results for O01-O07, one site per line (instant)
-    for p in O01 O02 O03 O04 O05 O06 O07; do
+    # the stored corpus results for O01-O09, one site per line (instant)
+    for p in O01 O02 O03 O04 O05 O06 O07 O08 O09; do
         echo "$p, B:";                     app_sites "$OWN/$p/$p.own"
         echo "$p, B + identity returns:";  app_sites "$OWN/$p/$p-id.own"
     done
@@ -175,6 +175,28 @@ T20)
         if cmp -s <(sort "$OWN/$f") <(sort "$old"); then echo "$f: identical to the stored result"
         else echo "$f: differs from the stored result on $(diff <(sort "$OWN/$f") <(sort "$old") | grep -c '^[<>]') lines"; fi
     done
+    ;;
+
+T17)
+    # Scope LCA on O08: scoped static cache
+    tool O08_static_scoped O08 -Downership.scopeLca=false
+    echo "O08 without Scope LCA (legacy):"
+    app_sites "$OWN/verify/O08/O08.own"
+    tool O08_static_scoped O08 -Downership.scopeLca=true
+    echo "O08 with Scope LCA:"
+    app_sites "$OWN/verify/O08/O08.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O08/run.log" | sed 's/^/   /'
+    ;;
+
+T18)
+    # Scope LCA on O09: cross-frame static session under controller
+    tool O09_static_cross_frame O09 -Downership.scopeLca=false
+    echo "O09 without Scope LCA (legacy):"
+    app_sites "$OWN/verify/O09/O09.own"
+    tool O09_static_cross_frame O09 -Downership.scopeLca=true
+    echo "O09 with Scope LCA:"
+    app_sites "$OWN/verify/O09/O09.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O09/run.log" | sed 's/^/   /'
     ;;
 
 *)

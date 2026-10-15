@@ -37,12 +37,14 @@ public class OwnershipTree {
 	int nNodes;
 	int siteBase;
 
-	int[] sccOf;
+	int[] sccOf; // Strongly Connected Component
 	boolean[] sccRecursive;
 	List<int[]> sccSucc;
 
 	final ReturnAnalysis returnAnalysis;
 	final UnsafeStoreHandler unsafeStores;
+	final StaticFieldLiveness staticLiveness;
+	final HeapPartition heapPartition;
 	final GraphBuilder builder;
 	final SiteNaming naming;
 	final OutputWriter writer;
@@ -62,15 +64,17 @@ public class OwnershipTree {
 		this.name = name;
 		this.returnAnalysis = new ReturnAnalysis(this);
 		this.unsafeStores = new UnsafeStoreHandler(this);
+		this.staticLiveness = new StaticFieldLiveness(this);
+		this.heapPartition = new HeapPartition(this);
 		this.builder = new GraphBuilder(this);
 		this.naming = new SiteNaming(this);
 		this.writer = new OutputWriter(this);
 	}
 
 	public static void main(String[] args) throws IOException {
-		boolean identity = Boolean.getBoolean("ownership.identityReturns");
+		boolean identity = Boolean.getBoolean("ownership.identityReturns"); // TODO: Where is this set?
 		boolean geom = Boolean.getBoolean("ownership.geom");
-		List<String> a = new ArrayList<>(Arrays.asList(new main.GetSootArgs().get(args)));
+		List<String> a = new ArrayList<>(Arrays.asList(new main.GetSootArgs().get(args))); // Disables merge-stringbuffer and strips all-reachable to preserve distinct call chains.
 		for (int i = 0; i + 1 < a.size(); i++) {
 			if (a.get(i).equals("-output-format")) a.set(i + 1, "none");
 			if (a.get(i).equals("-p") && a.get(i + 1).equals("cg") && i + 2 < a.size()
@@ -88,8 +92,8 @@ public class OwnershipTree {
 		Scene.v().loadDynamicClasses();
 		Scene.v().setEntryPoints(Scene.v().getEntryPoints());
 		long t0 = System.currentTimeMillis();
-		PackManager.v().getPack("wjpp").apply();
-		PackManager.v().getPack("cg").apply();
+		PackManager.v().getPack("wjpp").apply(); // Whole-Jimple Preprocessing Pack
+		PackManager.v().getPack("cg").apply(); // Call Graph Pack
 		System.out.println("[ownership] spark done in " + (System.currentTimeMillis() - t0) / 1000.0 + " s, "
 				+ Scene.v().getReachableMethods().size() + " reachable methods");
 		boolean inline = Boolean.getBoolean("ownership.inlineLib");
@@ -123,7 +127,7 @@ public class OwnershipTree {
 			if (n == 0) break;
 			pending = true;
 		}
-		if (reachBefore != null) {
+		if (reachBefore != null) { // Checks reachable methods before vs. after inlining to guarantee no application methods were accidentally severed.
 			Set<SootMethod> after = new HashSet<>();
 			for (Iterator<MethodOrMethodContext> it = Scene.v().getReachableMethods().listener(); it.hasNext(); )
 				after.add(it.next().method());
@@ -177,7 +181,7 @@ public class OwnershipTree {
 
 	/** Computes dominators on the given graph and classifies allocation sites. */
 	OwnershipResult classify(OwnershipGraph g, String label) {
-		g.freeze();
+		g.freeze(); // Freezes the edge list into a CSR (Compressed Sparse Row) representation for fast traversal.
 		long t0 = System.currentTimeMillis();
 		int[] idom = Dominators.dominators(nNodes, g.offsets, g.adjacency);
 		OwnershipResult r = new OwnershipResult();
@@ -319,6 +323,8 @@ public class OwnershipTree {
 		System.out.println("[ownership] " + unsafeStores.unsafeUnits.size() + " Unsafe object stores modelled as heap edges");
 		returnAnalysis.computeReturns();
 		methodSccs();
+		boolean scopeLca = Boolean.parseBoolean(System.getProperty("ownership.scopeLca", "true"));
+		if (scopeLca) staticLiveness.findStaticLifetimes();
 		OwnershipGraph gb = new OwnershipGraph(this);
 		builder.common(gb);
 		System.out.println("[ownership] " + entries.size() + " entry points, " + builder.asyncEntries.size()
@@ -347,6 +353,9 @@ public class OwnershipTree {
 		writer.writeOwn(b, nv, ord, names);
 		writer.writeTree(b, ord, names);
 		writer.summary("B", b);
+		heapPartition.partition(b);
+		heapPartition.printSummary();
+		heapPartition.writePartitionFile(names);
 		writer.summary("N", nv);
 		if (Boolean.getBoolean("ownership.whatif")) writer.whatIf(b, ord, names);
 	}
