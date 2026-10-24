@@ -70,7 +70,7 @@ public class HeapPartition {
 			} else if ("UP".equals(cls)) {
 				String reg = b.region[i];
 				partitions.computeIfAbsent(reg, RegionPartition::new).upSites.add(i);
-			} else {
+			} else if ("HEAP".equals(cls)) {
 				globalPartition.ownSites.add(i);
 			}
 		}

@@ -81,7 +81,12 @@ class StaticFieldLiveness {
 	 * Finds Lowest Common Ancestor (LCA) in the dominator tree.
 	 */
 	int lca(int u, int v) {
-		if (u == v) return u;
+		if (u == v) {
+			if (u >= 0 && u < sccIdom.length && sccIdom[u] != -1) return u;
+			return 0;
+		}
+		if (u < 0 || u >= sccIdom.length || sccIdom[u] == -1) return 0;
+		if (v < 0 || v >= sccIdom.length || sccIdom[v] == -1) return 0;
 		Set<Integer> anc = new HashSet<>();
 		for (int x = u; x >= 0; x = sccIdom[x]) {
 			anc.add(x);
@@ -153,18 +158,28 @@ class StaticFieldLiveness {
 				// Method-scoped static field
 				int capScc = curr - 1;
 				SootMethod capMethod = null;
-				// Find entry method for the capturing SCC
+				// Find entry method for the capturing SCC deterministically
+				List<SootMethod> candidates = new ArrayList<>();
 				for (SootMethod m : tree.methods) {
 					if (tree.sccOf[tree.methodId.get(m)] == capScc) {
-						if (capMethod == null) capMethod = m;
-						// Prefer entry method into SCC if reachable from outside
 						for (Iterator<Edge> eit = tree.cg.edgesInto(m); eit.hasNext(); ) {
 							SootMethod src = eit.next().src();
 							Integer smid = tree.methodId.get(src);
 							if (smid != null && tree.sccOf[smid] != capScc) {
-								capMethod = m;
+								candidates.add(m);
 								break;
 							}
+						}
+					}
+				}
+				if (!candidates.isEmpty()) {
+					candidates.sort(Comparator.comparing(SootMethod::getSignature));
+					capMethod = candidates.get(0);
+				} else {
+					for (SootMethod m : tree.methods) {
+						if (tree.sccOf[tree.methodId.get(m)] == capScc) {
+							capMethod = m;
+							break;
 						}
 					}
 				}
