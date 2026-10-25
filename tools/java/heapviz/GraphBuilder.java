@@ -33,7 +33,10 @@ class GraphBuilder {
 	final Map<Integer, List<Integer>> throwers = new HashMap<>();
 	final Map<Integer, BitSet> reachFrom = new HashMap<>();
 
-	// TODO: What are these Retaining Natives
+	/**
+	 * Bodiless JDK native methods that retain passed references into JVM-managed
+	 * immortal repositories without explicit release (e.g. String intern pool, OS thread runtime).
+	 */
 	static final Set<String> RETAINING_JDK_NATIVES = new HashSet<>(Arrays.asList(
 			"<java.lang.String: java.lang.String intern()>",
 			"<java.lang.Thread: void start0()>"));

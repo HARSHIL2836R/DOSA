@@ -33,14 +33,17 @@ class ReturnAnalysis {
 	}
 
 	/**
-	 * Which parameters a call's result may derive from, TOP if it may be something else.
+	 * Evaluates transfer function CallVal(u, y.p(z_1..z_k), D_m) for an invocation site.
+	 * Iterates over all possible callee targets in the call graph. If all targets strictly return
+	 * arguments derived from formal parameters, maps those callee parameter dependencies back to
+	 * caller actual arguments and computes the caller parameter derivation bitmask.
+	 * If any callee returns an allocation, static field, or unanalyzed source, returns TOP.
 	 *
 	 * @param u the invoke unit
 	 * @param ie the invoke expression
 	 * @param d parameter derivation mapping for locals in the caller
 	 * @return bitmask of parameter dependencies or TOP
 	 */
-	// TODO: The fuck is happening here?
 	long callValue(Unit u, InvokeExpr ie, Map<Local, Long> d) {
 		Iterator<Edge> it = tree.cg.edgesOutOf(u);
 		if (!it.hasNext()) return OwnershipTree.TOP;
