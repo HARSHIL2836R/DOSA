@@ -25,7 +25,7 @@ import os
 import re
 import sys
 
-H = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+H = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 BASE = {"avrora": "dacapo", "xalan": "xalan", "luindex": "luindex", "fop": "fop", "h2": "h2", "pmd": "pmd"}
 PRIM = {"B": "byte", "C": "char", "D": "double", "F": "float", "I": "int", "J": "long", "S": "short",
         "Z": "boolean", "V": "void"}
