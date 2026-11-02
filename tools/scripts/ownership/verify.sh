@@ -199,6 +199,47 @@ T18)
     grep -h 'static field liveness\|check B' "$OWN/verify/O09/run.log" | sed 's/^/   /'
     ;;
 
+T19)
+    # Scope LCA on O10: re-entrant controller method in loop
+    tool O10_static_reentrant O10 -Downership.scopeLca=false
+    echo "O10 without Scope LCA (legacy):"
+    app_sites "$OWN/verify/O10/O10.own"
+    tool O10_static_reentrant O10 -Downership.scopeLca=true
+    echo "O10 with Scope LCA:"
+    app_sites "$OWN/verify/O10/O10.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O10/run.log" | sed 's/^/   /'
+    ;;
+
+T21)
+    # Scope LCA on O11: chained <clinit> trigger attribution
+    tool O11_static_chained_clinit O11 -Downership.scopeLca=false
+    echo "O11 without Scope LCA (legacy):"
+    app_sites "$OWN/verify/O11/O11.own"
+    tool O11_static_chained_clinit O11 -Downership.scopeLca=true
+    echo "O11 with Scope LCA:"
+    app_sites "$OWN/verify/O11/O11.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O11/run.log" | sed 's/^/   /'
+    ;;
+
+T22)
+    # Thread confinement on O12: concurrent static access collapses to GLOBAL
+    tool O12_static_thread_confinement O12 -Downership.scopeLca=true
+    echo "O12 with Scope LCA (concurrent static collapses to GLOBAL):"
+    app_sites "$OWN/verify/O12/O12.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O12/run.log" | sed 's/^/   /'
+    ;;
+
+T23)
+    # Recurrent static cache on O13: live-in static field lifts to caller frame
+    tool O13_static_recurrent O13 -Downership.scopeLca=false
+    echo "O13 without Scope LCA (legacy):"
+    app_sites "$OWN/verify/O13/O13.own"
+    tool O13_static_recurrent O13 -Downership.scopeLca=true
+    echo "O13 with Scope LCA (live-in lifts to caller):"
+    app_sites "$OWN/verify/O13/O13.own"
+    grep -h 'static field liveness\|check B' "$OWN/verify/O13/run.log" | sed 's/^/   /'
+    ;;
+
 *)
     echo "unknown test $1; try: bash tools/scripts/ownership/verify.sh list"
     ;;

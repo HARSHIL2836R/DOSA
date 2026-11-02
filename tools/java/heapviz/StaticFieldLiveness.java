@@ -8,6 +8,7 @@ import soot.jimple.spark.pag.Node;
 import soot.jimple.spark.sets.P2SetVisitor;
 import soot.jimple.spark.sets.PointsToSetInternal;
 import soot.jimple.toolkits.callgraph.Edge;
+import soot.toolkits.graph.BriefUnitGraph;
 
 /**
  * Computes Scope LCA (Call-Graph Dominance) for static fields to bind
@@ -17,6 +18,7 @@ class StaticFieldLiveness {
 
 	final OwnershipTree tree;
 	final Map<SootField, Set<SootMethod>> fieldAccessors = new HashMap<>();
+	final Map<SootField, Set<Unit>> fieldClinitTriggers = new HashMap<>();
 	final Map<SootField, SootMethod> fieldCapturingMethod = new HashMap<>();
 	int[] sccIdom;
 	final Set<Integer> entrySccs = new HashSet<>();
@@ -100,10 +102,42 @@ class StaticFieldLiveness {
 	}
 
 	/**
+	 * Computes the transitive closure of classes initialized by a <clinit> method.
+	 */
+	Set<SootClass> getTransitiveClinitClasses(SootMethod rootClinit) {
+		Set<SootClass> classes = new HashSet<>();
+		Queue<SootMethod> queue = new ArrayDeque<>();
+		Set<SootMethod> visited = new HashSet<>();
+		if (rootClinit != null) {
+			queue.add(rootClinit);
+			visited.add(rootClinit);
+		}
+		while (!queue.isEmpty()) {
+			SootMethod cm = queue.poll();
+			classes.add(cm.getDeclaringClass());
+			if (cm.hasActiveBody()) {
+				for (Unit u : cm.getActiveBody().getUnits()) {
+					for (Iterator<Edge> it = tree.cg.edgesOutOf(u); it.hasNext(); ) {
+						Edge e = it.next();
+						if (e.kind() == Kind.CLINIT) {
+							SootMethod tgt = e.tgt();
+							if (visited.add(tgt)) {
+								queue.add(tgt);
+							}
+						}
+					}
+				}
+			}
+		}
+		return classes;
+	}
+
+	/**
 	 * Scans all reachable methods for static field references and <clinit> triggers.
 	 */
 	void collectAccessors() {
 		fieldAccessors.clear();
+		fieldClinitTriggers.clear();
 		for (SootMethod m : tree.methods) {
 			if (!m.hasActiveBody()) continue;
 			for (Unit u : m.getActiveBody().getUnits()) {
@@ -112,20 +146,113 @@ class StaticFieldLiveness {
 					SootField f = s.getFieldRef().getField();
 					fieldAccessors.computeIfAbsent(f, k -> new HashSet<>()).add(m);
 				}
-				// <clinit> trigger attribution
+				// <clinit> trigger attribution (transitive clinit chains)
 				for (Iterator<Edge> it = tree.cg.edgesOutOf(u); it.hasNext(); ) {
 					Edge e = it.next();
 					if (e.kind() == Kind.CLINIT) {
 						SootMethod clinit = e.tgt();
-						for (SootField f : clinit.getDeclaringClass().getFields()) {
-							if (f.isStatic()) {
-								fieldAccessors.computeIfAbsent(f, k -> new HashSet<>()).add(m);
+						Set<SootClass> initClasses = getTransitiveClinitClasses(clinit);
+						for (SootClass sc : initClasses) {
+							for (SootField f : sc.getFields()) {
+								if (f.isStatic()) {
+									fieldAccessors.computeIfAbsent(f, k -> new HashSet<>()).add(m);
+									fieldClinitTriggers.computeIfAbsent(f, k -> new HashSet<>()).add(u);
+								}
 							}
 						}
 					}
 				}
 			}
 		}
+	}
+
+	/**
+	 * Checks whether unit u defines static field f (via direct assignment or <clinit> trigger).
+	 */
+	boolean isDef(Unit u, SootField f) {
+		if (u instanceof AssignStmt) {
+			Value left = ((AssignStmt) u).getLeftOp();
+			if (left instanceof StaticFieldRef) {
+				if (((StaticFieldRef) left).getField().equals(f)) {
+					return true;
+				}
+			}
+		}
+		Set<Unit> triggers = fieldClinitTriggers.get(f);
+		return triggers != null && triggers.contains(u);
+	}
+
+	/**
+	 * Checks whether unit u reads static field f.
+	 */
+	boolean isUse(Unit u, SootField f) {
+		for (ValueBox vb : u.getUseBoxes()) {
+			Value v = vb.getValue();
+			if (v instanceof StaticFieldRef) {
+				if (((StaticFieldRef) v).getField().equals(f)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks whether method m contains an upward-exposed read of static field f
+	 * along any path from the CFG entry before an intervening Def (Live-In check).
+	 */
+	boolean isLiveIn(SootMethod m, SootField f) {
+		if (!m.hasActiveBody()) return false;
+		Body body = m.getActiveBody();
+		boolean hasUse = false;
+		for (Unit u : body.getUnits()) {
+			if (isUse(u, f)) {
+				hasUse = true;
+				break;
+			}
+		}
+		if (!hasUse) return false;
+
+		BriefUnitGraph graph = new BriefUnitGraph(body);
+		Set<Unit> visited = new HashSet<>();
+		Queue<Unit> queue = new ArrayDeque<>();
+		for (Unit head : graph.getHeads()) {
+			if (visited.add(head)) {
+				queue.add(head);
+			}
+		}
+		while (!queue.isEmpty()) {
+			Unit u = queue.poll();
+			if (isUse(u, f)) {
+				return true;
+			}
+			if (isDef(u, f)) {
+				continue;
+			}
+			for (Unit succ : graph.getSuccsOf(u)) {
+				if (visited.add(succ)) {
+					queue.add(succ);
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks whether any accessor method in the given SCC has an upward-exposed read of f.
+	 */
+	boolean isSccLiveIn(int scc, SootField f) {
+		Set<SootMethod> accessors = fieldAccessors.get(f);
+		if (accessors == null) return false;
+		for (SootMethod m : accessors) {
+			Integer mid = tree.methodId.get(m);
+			if (mid != null && tree.sccOf[mid] == scc) {
+				if (isLiveIn(m, f)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -148,6 +275,15 @@ class StaticFieldLiveness {
 			while (it.hasNext() && curr != 0) {
 				int next = tree.sccOf[tree.methodId.get(it.next())] + 1;
 				curr = lca(curr, next);
+			}
+
+			// Theorem 4: Caller Scope Lifting under Intra-Procedural Liveness.
+			// If candidate SCC has an upward-exposed read of f (Live-In), f retains state
+			// across invocations. Scope is iteratively lifted to caller idom until reaching
+			// a non-LiveIn caller SCC or program entry/root.
+			while (curr > 0 && curr < sccIdom.length && sccIdom[curr] != -1
+					&& !entrySccs.contains(curr - 1) && isSccLiveIn(curr - 1, f)) {
+				curr = sccIdom[curr];
 			}
 
 			if (curr == 0 || entrySccs.contains(curr - 1)) {
