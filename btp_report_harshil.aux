@@ -1,0 +1,117 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{cossjit2025}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Abstract}{3}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Introduction and Motivation}{3}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}The Heap Allocation Problem in Managed Runtimes}{3}{subsection.2.1}\protected@file@percent }
+\citation{choi1999escape}
+\citation{cossjit2025}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Escape Analysis: Capabilities and Limitations}{4}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Contributions}{4}{subsection.2.3}\protected@file@percent }
+\citation{choi1999escape}
+\citation{stadler2014pea}
+\citation{cossjit2025}
+\citation{cossjit2025}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Background}{5}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Escape Analysis and Stack Allocation}{5}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}CoSSJIT: Static Analysis with JIT Speculation}{5}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Stava: The Static Analysis Infrastructure}{5}{subsection.3.3}\protected@file@percent }
+\citation{clarke1998ownership,mitchell2006ownership,milanova2011ownership}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Dominator Trees and Ownership}{6}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Formal Semantics of Ownership Trees}{6}{section.4}\protected@file@percent }
+\newlabel{sec:semantics}{{4}{6}{Formal Semantics of Ownership Trees}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Concrete Dynamic State}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}The Instantaneous Heap Graph $H_t$}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Concrete Ownership Tree $T_t$}{7}{subsection.4.3}\protected@file@percent }
+\newlabel{thm:subtree-reclamation}{{4.3}{7}{Single Subtree Reclamation at Frame Exit}{theorem.4.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}The Abstract Ownership Graph $G^\sharp $}{7}{section.5}\protected@file@percent }
+\newlabel{sec:graph}{{5}{7}{The Abstract Ownership Graph $G^\sharp $}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Node Universe}{7}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Parameter Derivation Lattice $\mathcal  {L}_{\text  {ret}}$}{7}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Edge Insertion Rules}{8}{subsection.5.3}\protected@file@percent }
+\newlabel{sec:edge-rules}{{5.3}{8}{Edge Insertion Rules}{subsection.5.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.1}Root, Call Chain, and Global Edges}{8}{subsubsection.5.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.2}Heap and Global Reachability Edges}{8}{subsubsection.5.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.3}Frame Edges and the Negative Borrow Rule}{8}{subsubsection.5.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{The Negative Borrow Rule.}{9}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Algorithms}{9}{section.6}\protected@file@percent }
+\newlabel{sec:algorithms}{{6}{9}{Algorithms}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Algorithm 1: Interprocedural Monotone Fixed-Point Parameter Derivation}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Interprocedural Monotone Fixed-Point Parameter Derivation}}{9}{algorithm.1}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{alg:retparams}{{1}{9}{Interprocedural Monotone Fixed-Point Parameter Derivation}{algorithm.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Algorithm 2: Ownership Graph Construction and CSR Freezing}{9}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Algorithm 3: Scope LCA for Static Field Lifetime Bounding}{10}{subsection.6.3}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Scope LCA for Static Field Lifetime Bounding}}{10}{algorithm.2}\protected@file@percent }
+\newlabel{alg:scopelca}{{2}{10}{Scope LCA for Static Field Lifetime Bounding}{algorithm.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Algorithm 4: Method Arena Partitioning}{11}{subsection.6.4}\protected@file@percent }
+\@writefile{loa}{\contentsline {algorithm}{\numberline {3}{\ignorespaces Whole-Program Method Arena Partitioning}}{11}{algorithm.3}\protected@file@percent }
+\newlabel{alg:partition}{{3}{11}{Whole-Program Method Arena Partitioning}{algorithm.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Soundness Proofs}{11}{section.7}\protected@file@percent }
+\newlabel{sec:proofs}{{7}{11}{Soundness Proofs}{section.7}{}}
+\newlabel{lem:borrow}{{7.1}{11}{Borrow Rule Path Preservation}{theorem.7.1}{}}
+\newlabel{lem:callchain}{{7.2}{11}{Call Chain Invariance}{theorem.7.2}{}}
+\newlabel{lem:thread}{{7.3}{11}{Thread Confinement}{theorem.7.3}{}}
+\newlabel{lem:static}{{7.4}{12}{Static Scope Invariance}{theorem.7.4}{}}
+\newlabel{thm:dom-sound}{{7.5}{12}{Dominator Soundness}{theorem.7.5}{}}
+\newlabel{thm:global}{{7.6}{12}{Residual Global Invariant}{theorem.7.6}{}}
+\newlabel{thm:reentrancy}{{7.7}{12}{Boundary Re-Entrancy}{theorem.7.7}{}}
+\newlabel{thm:main}{{7.8}{12}{Main Soundness: Frame-Bound Reclamation}{theorem.7.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Implementation}{12}{section.8}\protected@file@percent }
+\newlabel{sec:implementation}{{8}{12}{Implementation}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}HeapViz: The Static Analysis Toolchain}{12}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Micro-Corpus Verification Suite}{13}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}OpenJ9 Testarossa JIT Integration}{13}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Evaluation}{13}{section.9}\protected@file@percent }
+\newlabel{sec:evaluation}{{9}{13}{Evaluation}{section.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Experimental Setup}{13}{subsection.9.1}\protected@file@percent }
+\citation{kavya2026}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Static Ownership Analysis Results (DaCapo 9.12-MR1)}}{14}{table.caption.3}\protected@file@percent }
+\newlabel{tab:static-results}{{1}{14}{Static Ownership Analysis Results (DaCapo 9.12-MR1)}{table.caption.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Static Analysis Results}{14}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Dynamic Profiling (JFR)}{14}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.4}Physical Hardware JIT Debug Counters}{14}{subsection.9.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces OpenJ9 Hardware Debug Counter Results (Warmed, \texttt  {-n 5})}}{14}{table.caption.4}\protected@file@percent }
+\newlabel{tab:hw-results}{{2}{14}{OpenJ9 Hardware Debug Counter Results (Warmed, \texttt {-n 5})}{table.caption.4}{}}
+\citation{clarke1998ownership}
+\citation{mitchell2006ownership}
+\citation{milanova2011ownership}
+\citation{tofte1997region}
+\citation{lattner2005automatic}
+\citation{verona2019}
+\citation{choi1999escape}
+\citation{stadler2014pea}
+\citation{uno2007}
+\citation{cherem2007}
+\citation{guyer2006freeme}
+\citation{cossjit2025}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.5}Comparison with Prior Work}{15}{subsection.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Related Work}{15}{section.10}\protected@file@percent }
+\newlabel{sec:related}{{10}{15}{Related Work}{section.10}{}}
+\@writefile{toc}{\contentsline {paragraph}{Ownership Types.}{15}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Region-Based Memory Management.}{15}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Escape Analysis.}{15}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{CoSSJIT.}{15}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Conclusion and Future Work}{15}{section.11}\protected@file@percent }
+\newlabel{sec:conclusion}{{11}{15}{Conclusion and Future Work}{section.11}{}}
+\bibcite{cossjit2025}{{1}{}{{}}{{}}}
+\bibcite{choi1999escape}{{2}{}{{}}{{}}}
+\bibcite{clarke1998ownership}{{3}{}{{}}{{}}}
+\bibcite{mitchell2006ownership}{{4}{}{{}}{{}}}
+\bibcite{milanova2011ownership}{{5}{}{{}}{{}}}
+\bibcite{tofte1997region}{{6}{}{{}}{{}}}
+\bibcite{lattner2005automatic}{{7}{}{{}}{{}}}
+\bibcite{verona2019}{{8}{}{{}}{{}}}
+\bibcite{stadler2014pea}{{9}{}{{}}{{}}}
+\bibcite{uno2007}{{10}{}{{}}{{}}}
+\bibcite{cherem2007}{{11}{}{{}}{{}}}
+\@writefile{toc}{\contentsline {paragraph}{Future Work.}{16}{section*.9}\protected@file@percent }
+\bibcite{guyer2006freeme}{{12}{}{{}}{{}}}
+\bibcite{kavya2026}{{13}{}{{}}{{}}}
+\bibcite{anand2024heapify}{{14}{}{{}}{{}}}
+\bibcite{anand2022principles}{{15}{}{{}}{{}}}
+\bibcite{dacapo2006}{{16}{}{{}}{{}}}
+\providecommand\NAT@force@numbers{}\NAT@force@numbers
+\gdef \@abspage@last{18}

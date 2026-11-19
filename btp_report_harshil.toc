@@ -1,0 +1,45 @@
+\contentsline {section}{\numberline {1}Abstract}{3}{section.1}%
+\contentsline {section}{\numberline {2}Introduction and Motivation}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}The Heap Allocation Problem in Managed Runtimes}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Escape Analysis: Capabilities and Limitations}{4}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Contributions}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Background}{5}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Escape Analysis and Stack Allocation}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}CoSSJIT: Static Analysis with JIT Speculation}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Stava: The Static Analysis Infrastructure}{5}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Dominator Trees and Ownership}{6}{subsection.3.4}%
+\contentsline {section}{\numberline {4}Formal Semantics of Ownership Trees}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Concrete Dynamic State}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}The Instantaneous Heap Graph $H_t$}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Concrete Ownership Tree $T_t$}{7}{subsection.4.3}%
+\contentsline {section}{\numberline {5}The Abstract Ownership Graph $G^\sharp $}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Node Universe}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Parameter Derivation Lattice $\mathcal {L}_{\text {ret}}$}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Edge Insertion Rules}{8}{subsection.5.3}%
+\contentsline {subsubsection}{\numberline {5.3.1}Root, Call Chain, and Global Edges}{8}{subsubsection.5.3.1}%
+\contentsline {subsubsection}{\numberline {5.3.2}Heap and Global Reachability Edges}{8}{subsubsection.5.3.2}%
+\contentsline {subsubsection}{\numberline {5.3.3}Frame Edges and the Negative Borrow Rule}{8}{subsubsection.5.3.3}%
+\contentsline {paragraph}{The Negative Borrow Rule.}{9}{section*.2}%
+\contentsline {section}{\numberline {6}Algorithms}{9}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Algorithm 1: Interprocedural Monotone Fixed-Point Parameter Derivation}{9}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Algorithm 2: Ownership Graph Construction and CSR Freezing}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Algorithm 3: Scope LCA for Static Field Lifetime Bounding}{10}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Algorithm 4: Method Arena Partitioning}{11}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Soundness Proofs}{11}{section.7}%
+\contentsline {section}{\numberline {8}Implementation}{12}{section.8}%
+\contentsline {subsection}{\numberline {8.1}HeapViz: The Static Analysis Toolchain}{12}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Micro-Corpus Verification Suite}{13}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}OpenJ9 Testarossa JIT Integration}{13}{subsection.8.3}%
+\contentsline {section}{\numberline {9}Evaluation}{13}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Experimental Setup}{13}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Static Analysis Results}{14}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Dynamic Profiling (JFR)}{14}{subsection.9.3}%
+\contentsline {subsection}{\numberline {9.4}Physical Hardware JIT Debug Counters}{14}{subsection.9.4}%
+\contentsline {subsection}{\numberline {9.5}Comparison with Prior Work}{15}{subsection.9.5}%
+\contentsline {section}{\numberline {10}Related Work}{15}{section.10}%
+\contentsline {paragraph}{Ownership Types.}{15}{section*.5}%
+\contentsline {paragraph}{Region-Based Memory Management.}{15}{section*.6}%
+\contentsline {paragraph}{Escape Analysis.}{15}{section*.7}%
+\contentsline {paragraph}{CoSSJIT.}{15}{section*.8}%
+\contentsline {section}{\numberline {11}Conclusion and Future Work}{15}{section.11}%
+\contentsline {paragraph}{Future Work.}{16}{section*.9}%
