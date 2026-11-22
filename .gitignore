@@ -13,3 +13,4 @@ __pycache__/
 
 *.dot
 *.svg
+latexmk_out/
