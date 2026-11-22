@@ -1,6 +1,14 @@
-# heapviz
+# HeapViz & DOSA
 
-Micro-corpus and static visualisation of Stava's escape-dependency graph.
+Micro-corpus, static ownership inference engine, and visualization toolkit for Java memory management.
+
+HeapViz houses **DOSA** (**D**ominator-guided **O**wnership for **S**tack **A**llocation), an inter-procedural static analysis system built on Soot and Jimple IR that computes object ownership and lifetime bounds through dominator trees over dynamic call stack frames.
+
+## Core Capabilities of DOSA in HeapViz
+- **The Argument-Passthrough Filter**: Overcomes the 100% constructor collapse barrier ($G_N$) by tracking argument derivation across a 64-bit parameter lattice $\mathcal{L}_{\text{ret}}$ (`ReturnAnalysis.java`).
+- **Static Scoping**: Bounds global static field lifetimes to capturing method frames via dominator LCA over the call graph SCC DAG $\widetilde{G}_{\text{scc}}$ (`StaticFieldLiveness.java`), rescuing 341 application sites across DaCapo.
+- **Method Region Partitioning**: Maps whole-program allocation sites and static fields into method-scoped memory regions $\mathcal{P}(M)$ (`HeapPartition.java`), emitting compilation directives for OpenJ9 Testarossa JIT.
+- **Micro-Corpus & Verification**: 44 hand-derived test cases verifying formal semantics against Lengauer-Tarjan and Cooper-Harvey-Kennedy dominators.
 
 New code only. `../stava/` is a **reference checkout and is never edited**. Anything Stava would have to change to emit what we need
 lives in `patches/` as an unapplied `.patch` file, applied only to a throwaway copy of the

@@ -1,9 +1,9 @@
 # HeapViz — Architecture & Control Flow
 
-> **What this project does**: HeapViz is a static ownership analysis tool for Java programs.
+> **What this project does**: HeapViz implements **DOSA** (Dominator-guided Ownership for Stack Allocation), a static ownership and lifetime analysis system for Java programs.
 > It runs Soot/Spark points-to analysis on DaCapo benchmarks, builds a dominator tree over the
 > heap graph, and classifies every allocation site as **OWN** (owned by the allocating method),
-> **UP** (owned by an ancestor in the call chain), or **HEAP** (globally reachable).
+> **UP** (owned by an ancestor in the call chain), or **HEAP** (globally reachable), with Static Scoping for static fields and Method Region Partitioning ($\mathcal{P}(M)$).
 
 ---
 
@@ -205,6 +205,8 @@ flowchart LR
 | **UnsafeStoreHandler** | ~95 | Detects `sun.misc.Unsafe.putObject` calls (`findUnsafeStores()`) and models them as proxy heap edges so unsafe direct memory mutations do not escape ownership tracking. |
 | **OwnershipGraph** | ~70 | Edge accumulator with deduplication (`add()`). Sorts and compacts into CSR (Compressed Sparse Row) format (`freeze()`) for fast traversal. |
 | **OwnershipResult** | ~20 | Data class holding classification arrays: `idom[]`, `cls[]`, `region[]`, `owner[]`, `up[]`, `rec[]`. |
+| **StaticFieldLiveness** | ~260 | Implements Static Scoping: computes dominator LCA over the condensed Call Graph SCC DAG $\widetilde{G}_{\text{scc}}$ to bind global static fields to capturing method activation frames. |
+| **HeapPartition** | ~180 | Implements Method Region Partitioning: groups whole-program allocation sites and static fields into method-scoped memory regions $\mathcal{P}(M)$, emitting OpenJ9 directives. |
 | **IntList** | ~15 | Growable unboxed primitive `int[]` array (like `ArrayList<Integer>` without heap boxing). |
 
 ### Internal Flow of `OwnershipTree.run()`
@@ -254,16 +256,18 @@ Every entity in the ownership graph gets a unique integer ID:
 - **2+M .. 2+M+S-1** = allocation sites (one per `new` expression Spark tracks)
 - **2+M+S ..** = Unsafe store proxy nodes
 
-### The Borrow Rule (Graph B vs Graph N)
-- **Graph B** uses the *borrow rule*: a frame only gets an edge to an object if it actually *creates* it (`new`), receives it from a call that isn't parameter-derived, or catches it.
-- **Graph N** is the naive baseline: every local in a method points to its entire Spark points-to set.
-- The borrow rule makes Graph B much sparser, letting more sites be classified as OWN.
+### The Argument-Passthrough Filter (Graph B vs Graph N)
+- **Graph B** uses the *Argument-Passthrough Filter* (formerly borrow rule): a frame only gets an edge to an object if it actually *creates* it (`Frame-New`), receives it from a call that isn't parameter-derived (`Frame-Call`), or catches an exception (`Frame-Catch`).
+- **Graph N** is the naive baseline: every local in a method points to its entire Spark points-to set, causing universal 100% constructor collapse into `GLOBAL`.
+- The Argument-Passthrough Filter makes Graph B sparser and preserves method frame dominance.
 
-### Classification
+### Classification & Method Region Partitioning
 For each allocation site, walk up the dominator tree to the nearest method:
 - **OWN**: the nearest method *is* the allocating method → the object dies when that method returns
 - **UP(k)**: the nearest method is *k* SCC hops above the allocator in the call graph
 - **HEAP**: no method dominates the site (reachable from GLOBAL or ROOT directly)
+
+Together with **Static Scoping** for global static fields, allocation sites and scoped fields are partitioned into method-scoped memory regions $\mathcal{P}(M) = \mathcal{S}_{\text{OWN}}(M) \cup \bigcup_{k \ge 1} \mathcal{S}_{\text{UP}_k}(M) \cup \mathcal{F}_{\text{static}}(M)$ for OpenJ9 runtime execution.
 
 ---
 
