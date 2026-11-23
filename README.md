@@ -1,6 +1,6 @@
 # DOSA: Dominator-guided Ownership for Stack Allocation
 
-**DOSA** is an inter-procedural static analysis system and runtime realization framework for region-based object allocation in Java. Built on top of **Soot** (Jimple IR) and **Eclipse OpenJ9** (Testarossa JIT), DOSA infers object ownership and lifetime boundaries by computing dominator trees over dynamic call stack frames.
+**DOSA** is an inter-procedural static analysis system and runtime realization framework for region-based object allocation in Java. Built on top of **Soot** (Jimple IR) via a reference checkout of **Stava** and **Eclipse OpenJ9** (Testarossa JIT), DOSA infers object ownership and lifetime boundaries by computing dominator trees over dynamic call stack frames.
 
 ---
 
@@ -149,28 +149,54 @@ DOSA/
 │       ├── verify.sh               # Automated verification harness (T1–T23)
 │       └── run_benchmarks.sh       # DaCapo benchmark execution harness
 │
-├── patches/                        # Standalone patches applied to reference Stava checkout
+├── patches/                        # Standalone patches applied out-of-tree to Stava sources (0001–0006)
 ├── extract/                        # Jimple IR and points-to graph extraction tools
 └── render/                         # Visualization scripts (graph.json -> SVG/DOT/HTML)
 ```
+
+> **Sibling Repository Requirement**: `DOSA` expects a reference checkout of `stava` at `../stava/` (`https://github.com/CompL-Research/stava.git`). The sibling checkout provides the Soot jar (`../stava/soot/sootclasses-trunk-jar-with-dependencies.jar`) and the DaCapo benchmark suites (`../stava/benchmarks/`). The reference `stava/` checkout is strictly read-only and never modified in place.
 
 ---
 
 ## 6. Build & Verification Runbook
 
 ### 6.1 Prerequisites
-- **Java Development Kit**: JDK 8 (required for Soot 3.3.0 and Jimple bytecode parsing).
-- **Python**: Python 3.8+ (for statistics mining and visualization).
-- **LaTeX**: TeX Live 2024 / latexmk (for compiling the thesis report).
-- **OS**: Linux / WSL (Ubuntu 22.04+) or Windows PowerShell.
+
+1. **Java Development Kit**: JDK 8 (required for Soot 3.3.0 and Jimple bytecode parsing). Set `JAVA_HOME_STAVA` if not default:
+   ```bash
+   export JAVA_HOME_STAVA=/path/to/jdk8
+   ```
+2. **Sibling Stava Repository (`../stava`) — Essential Build Dependency**:
+   DOSA builds directly against the **Stava** escape analysis infrastructure developed in the CompL research group:
+   - **Repository**: Clone `https://github.com/CompL-Research/stava.git` as a sibling directory alongside `DOSA`:
+     ```bash
+     cd ..
+     git clone https://github.com/CompL-Research/stava.git
+     cd DOSA
+     ```
+   - **Soot & Spark Toolchain**: `../stava/soot/sootclasses-trunk-jar-with-dependencies.jar` provides the foundational Soot 3.3.0 classes, Jimple IR parser, and Spark points-to solver.
+   - **Soot Argument Setup (`main.GetSootArgs`)**: DOSA links against Stava's compiled arguments extractor (`build/classes-reason6`) so that Soot initializes the exact call graph and Tamiflex reflection configuration.
+   - **DaCapo Benchmark Suite**: `../stava/benchmarks/` houses the pre-unpacked DaCapo 9.12-MR1 benchmark class suites (`dacapo`, `xalan`, `luindex`, `fop`, `h2`, `pmd`).
+   - **Out-of-Tree Build Isolation**: The reference `stava/` checkout is **strictly read-only and never modified in place**. DOSA's `build.sh` copies Stava sources into `build/`, applies out-of-tree patches from `patches/` (`0001` through `0006`), and compiles the runtime helper classes.
+3. **Python**: Python 3.8+ (for statistics extraction, graph mining, and visualization).
+4. **LaTeX**: TeX Live 2024 / `latexmk` (for compiling `btp_report_harshil.tex`).
+5. **OS**: Linux / WSL (Ubuntu 22.04+) or Windows PowerShell.
 
 ### 6.2 Compiling the Engine
-Compile the Java static analysis engine:
-```bash
-cd tools/scripts/ownership
-bash build.sh
-```
-This places compiled classes into `build/ownership-classes/`.
+
+1. **Bootstrap Stava & Out-of-Tree Patches**:
+   Before compiling the ownership engine for the first time, run a single corpus build to compile patched Stava classes into `build/classes-reason6/`:
+   ```bash
+   bash build.sh M01_mixed M01 "M01 Box Item Node" "<M01: void main(java.lang.String[])>"
+   ```
+
+2. **Compile the DOSA Ownership Engine**:
+   Compile the Java static analysis engine using the Soot jar and compiled Stava classes on the classpath:
+   ```bash
+   cd tools/scripts/ownership
+   bash build.sh
+   ```
+   This compiles all classes in `tools/java/heapviz/*.java` into `build/ownership-classes/`.
 
 ### 6.3 Running Automated Regression Tests (`verify.sh`)
 DOSA includes 23 verification targets that validate formal inference rules against hand-derived ground truth:
