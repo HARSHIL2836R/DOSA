@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # rerender_p6.sh - redraw only the reason figures from the graphs run_dashboard_p6.sh extracted.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 FIG=$H/render/figures
 export HEAPVIZ_REASON_MODE=roots
 for b in avrora-false avrora-true xalan-false luindex-false fop-false h2-false pmd-false; do

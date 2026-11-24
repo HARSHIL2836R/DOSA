@@ -2,7 +2,7 @@
 # run_source_maps.sh - universal reason sets across all six benchmarks, then map only those
 # objects to (allocation site, escape site).
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 export JAVA_HOME=/home/harshil/jvm/jdk8u502-b07
 B=$H/../stava/benchmarks
 O=$H/build/out/source-maps

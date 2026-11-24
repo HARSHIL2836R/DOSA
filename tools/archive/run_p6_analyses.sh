@@ -6,7 +6,7 @@
 #   frame_depth.py    frames down (Meet 5's frame-depth axis)
 #   hotspot_vs_sites.py  of the hub sites and hoist candidates, how many C2 already removes
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 O=$H/build/out
 mkdir -p $O/alloc-unit $O/param-hubs $O/capture-level $O/frame-depth $O/hotspot
 go() {   # go <name> <cfg> <prefix...>

@@ -1,6 +1,6 @@
 import os, sys
 from collections import Counter
-sys.path.insert(0, "/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz/extract/python")
+sys.path.insert(0, "/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA/extract/python")
 from benchmark_scale import build
 from info_to_graph import find_reasons_file, read_reasons
 d = sys.argv[1]

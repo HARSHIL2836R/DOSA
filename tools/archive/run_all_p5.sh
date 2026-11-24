@@ -3,7 +3,7 @@
 # 02-Current-Work/02-Specs/2026-09-14-Viz-Faithfulness-Audit.md) and check each whole run against patch 0004:
 # .res unchanged, .reasons columns 1-4 unchanged, column-5 pointer sets unchanged, own within all.
 set -u
-DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 SOOT=$DIR/../stava/soot/sootclasses-trunk-jar-with-dependencies.jar
 CLS=$DIR/build/classes-reason5

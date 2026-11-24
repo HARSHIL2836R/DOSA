@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_avrora_p4.sh - avrora on the patch-0004 build: verdict unchanged, then the roots effect.
-DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 SOOT=$DIR/../stava/soot/sootclasses-trunk-jar-with-dependencies.jar
 OUT=/tmp/rv/out/dacapo-false-p4

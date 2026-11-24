@@ -4,7 +4,7 @@
 bci_to_source.py already maps (method, bci) to File.java:line through the LineNumberTable of the
 exact class files Stava analysed (the Tamiflex dump under stava/benchmarks/<b>/out). This adds
 the source text: the upstream source release of each benchmark, at the version DaCapo 9.12-MR1
-packs, downloaded 2026-09-22 into heapviz/build/sources/ (git-ignored):
+packs, downloaded 2026-09-22 into DOSA/build/sources/ (git-ignored):
 
   avrora   cmorty/avrora @ 1378b15e05, 2009-12-23: last commit before the jar's cvs-20091224 snapshot
   xalan    xalan-j_2_7_1-src.tar.gz, archive.apache.org

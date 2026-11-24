@@ -1,4 +1,4 @@
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 cd $H/extract
 P=population_split.py
 python3 $P /tmp/rv/avrora-info-false  "avrora"  avrora.

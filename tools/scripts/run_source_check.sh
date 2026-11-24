@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_source_check.sh - tools/python/source_check.py on all six benchmarks (patch-0006 runs), in parallel.
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 chk() { python3 $H/tools/python/source_check.py --bench $1 --alloc $(ls /tmp/rv/p6info/$1-false/*.alloc) --class-prefix "${@:2}" > /tmp/rv/sc-$1.txt 2>&1; }
 chk avrora avrora. &
 chk xalan org.apache.xalan. org.apache.xpath. org.apache.xml. &

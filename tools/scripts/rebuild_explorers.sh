@@ -1,5 +1,5 @@
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 cd $H/extract
 for n in avrora xalan luindex fop h2 pmd; do
   g=$H/build/out/$n-p3/graph-full.json

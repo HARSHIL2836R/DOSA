@@ -223,35 +223,35 @@ This exploratory telemetry revealed that over 64\% of escaping objects possess o
 \centering
 \begin{tikzpicture}[
     bar/.style={draw=black!70, thick, rounded corners=1pt},
-    lbl/.style={font=\scriptsize\ttfamily, anchor=east},
+    lbl/.style={font=\scriptsize\ttfamily\bfseries, anchor=east},
     val/.style={font=\scriptsize\bfseries, anchor=west},
-    target/.style={font=\scriptsize, text=black!80, anchor=west}
+    target/.style={font=\scriptsize\bfseries, anchor=west}
 ]
   % Y-coordinates
   \node[lbl] at (-0.1, 3.2) {ASSIGNED\_TO\_THIS\_OR\_PARAM};
   \filldraw[bar, fill=blue!25] (0, 3.0) rectangle (5.5, 3.4);
   \node[val] at (5.6, 3.2) {1,815 (52.9\%)};
-  \node[target] at (7.8, 3.2) {$\rightarrow$ Argument-Passthrough Filter};
+  \node[target, text=blue!80!black] at (7.8, 3.2) {$\rightarrow$ Argument-Passthrough Filter};
 
   \node[lbl] at (-0.1, 2.4) {STATIC\_FIELD\_LOAD};
   \filldraw[bar, fill=orange!35] (0, 2.2) rectangle (1.71, 2.6);
   \node[val] at (1.81, 2.4) {564 (16.4\%)};
-  \node[target] at (7.8, 2.4) {$\rightarrow$ Static Scoping};
+  \node[target, text=orange!80!black] at (7.8, 2.4) {$\rightarrow$ Static Scoping};
 
   \node[lbl] at (-0.1, 1.6) {RETURNED};
   \filldraw[bar, fill=teal!30] (0, 1.4) rectangle (1.59, 1.8);
   \node[val] at (1.69, 1.6) {526 (15.3\%)};
-  \node[target] at (7.8, 1.6) {$\rightarrow$ \UP{} Regions};
+  \node[target, text=teal!80!black] at (7.8, 1.6) {$\rightarrow$ \UP{} Regions};
 
   \node[lbl] at (-0.1, 0.8) {STATIC\_FIELD\_STORE};
   \filldraw[bar, fill=orange!35] (0, 0.6) rectangle (1.21, 1.0);
   \node[val] at (1.31, 0.8) {398 (11.6\%)};
-  \node[target] at (7.8, 0.8) {$\rightarrow$ Static Scoping};
+  \node[target, text=orange!80!black] at (7.8, 0.8) {$\rightarrow$ Static Scoping};
 
   \node[lbl] at (-0.1, 0.0) {Other (Thrown, Monitor, etc.)};
   \filldraw[bar, fill=gray!30] (0, -0.2) rectangle (0.38, 0.2);
   \node[val] at (0.48, 0.0) {126 (3.7\%)};
-  \node[target] at (7.8, 0.0) {$\rightarrow$ Residual \HEAP{}};
+  \node[target, text=gray!80!black] at (7.8, 0.0) {$\rightarrow$ Residual \HEAP{}};
 
   % Baseline
   \draw[thick, black!60] (0, -0.4) -- (0, 3.6);
@@ -546,6 +546,75 @@ The \textbf{concurrency severing filter} ($\neg\text{async}$) is essential for s
 \end{align}
 
 \paragraph{The Argument-Passthrough Filter.} If $u \in m: x = y.p(\vec{z})$ and $\top \notin \retParams(p)$, then the returned reference derives entirely from the caller's arguments. No frame edge $m \to s$ is inserted, because the caller already dominates $s$ through its own argument edges. This filter prevents spurious cycles: without it, every constructor invocation (which returns \texttt{this} or passes it to \texttt{Object.<init>}) would draw edges to all objects in the constructor's points-to set, directing 100\% of allocation sites to \HEAP{}.
+
+\subsection{Edge Taxonomy}
+\label{sec:edge-taxonomy}
+
+The abstract ownership graph $G^\sharp$ combines execution roots, methods, and allocation sites into a single graph. This subsection clarifies what directed edges mean, how labels are used, and how the dominator solver consumes them.
+
+\subsubsection{What Directed Edges Mean}
+
+Every directed edge $u \to v \in E^\sharp$ has one uniform meaning: \textbf{$u$ can access or keep $v$ alive}.
+
+\begin{itemize}
+  \item \textbf{Call Chain ($m_1 \to m_2$):} Method $m_1$ calls $m_2$, keeping frame $f_{m_2}$ active on the call stack.
+  \item \textbf{Frame Allocation ($m \to s$):} Method frame $f_m$ directly holds a reference to an object from site $s$.
+  \item \textbf{Heap Dereference ($s_1 \to s_2$):} An object from site $s_1$ references an object from site $s_2$ through an instance field.
+  \item \textbf{Scoped Static Reference ($\Scope(F) \to s$):} Static field $F$, scoped to controller method $\Scope(F)$, references an object from site $s$.
+  \item \textbf{Unconfined Root Reference ($\GLOBAL \to s$):} An immortal root (such as an unconfined static field or entry parameter) references $s$ outside any method frame.
+\end{itemize}
+
+Every runtime access path in the JVM heap graph $H_t$ from the execution root to an object $o$ maps directly to a directed path in $G^\sharp$ from $\ROOT$ to $s = \text{AllocSite}(o)$ (Lemma~\ref{lem:path-preservation}).
+
+\subsubsection{How Edge Labels Are Used}
+
+In diagrams and logs, edges carry descriptive tags such as \texttt{call}, \texttt{new}, or \texttt{.field}. Their role in the analysis is straightforward:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{During Graph Construction:} Labels indicate which inference rule inserted the edge, making the graph traceable for debugging and verification.
+  \item \textbf{During Dominator Solving:} \textbf{All edge labels are stripped.} The graph is stored in Compressed Sparse Row (CSR) format as an unweighted, unlabeled directed graph. The Lengauer-Tarjan solver computes standard single-source dominators on graph topology alone:
+  \[
+  d \dom n \iff \forall \text{ directed paths } \pi: \ROOT \rightsquigarrow n \text{ in } G^\sharp, \ d \in \pi
+  \]
+  The solver does not evaluate grammar rules, edge weights, or label-matching operations.
+  \item \textbf{During Region Assignment:} If an allocation site is dominated by another site ($s_1 \xrightarrow{\idom} s_2$), Algorithm~\ref{alg:partition} ascends the dominator tree until reaching the nearest enclosing method $M$, assigning $M$ as the region owner ($\mathcal{P}[M]$).
+\end{enumerate}
+
+\begin{table}[htbp]
+\centering
+\caption{Taxonomy of Directed Edges in the Abstract Ownership Graph $G^\sharp$.}
+\label{tab:edge-taxonomy}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\textwidth}{@{}lllXX@{}}
+\toprule
+\textbf{Inference Rule} & \textbf{Edge ($u \to v$)} & \textbf{Diagram Label} & \textbf{Dynamic Invariant ($H_t$)} & \textbf{Role in Dominance Analysis} \\
+\midrule
+(Root-Global) & $\ROOT \to \GLOBAL$ & \texttt{root-global} & Root references global environment & Anchors immortal root \\
+(Root-Entry)  & $\ROOT \to m_{\text{entry}}$ & \texttt{root-entry} & Root pushes entry method frame & Establishes main call trunk \\
+(Root-Async)  & $\ROOT \to m_{\text{async}}$ & \texttt{root-async} & Spawns independent thread root & Severs async frame coupling \\
+(Call-Chain)  & $m \to m'$ & \texttt{call} & Active caller $f_m$ pushes callee $f_{m'}$ & Propagates stack dominance \\
+\midrule
+(Heap-Field)  & $s_1 \to s_2$ & \texttt{.field} & Instance field points to child object & Encapsulates child in container \\
+(Static-Field)& $\Scope(F) \to s$ & \texttt{scope} & Scoped static field points to object & Binds static lifetime to $\Scope(F)$ \\
+(Special-Sink)& $\GLOBAL \to s$ & \texttt{escape} & VM/native sink retains reference & Forces site into $\mathcal{H}_{\GLOBAL}$ \\
+(Entry-Param) & $\GLOBAL \to s$ & \texttt{escape} & Entry parameter receives external reference & Bypasses method stack frames \\
+\midrule
+(Frame-New)   & $m \to s$ & \texttt{new} & Frame $f_m$ directly instantiates object & Makes $m$ candidate dominator \\
+(Frame-Call)  & $m \to s$ & \texttt{call-ret} & Frame $f_m$ receives fresh callee return & Extends lifetime to caller $m$ \\
+(Frame-Catch) & $m \to s$ & \texttt{catch} & Frame $f_m$ catches exception object & Binds caught instance to $m$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection{Directionality and Edge Suppression (Why No Return Edges?)}
+
+Edges in $G^\sharp$ flow strictly in the direction of access capability:
+
+\begin{itemize}
+  \item When a callee creates and returns a fresh object, Rule~(Frame-Call) draws an edge directly from the caller to the object ($m \to s$). No backward edge from callee to caller is drawn.
+  \item When a callee returns a caller-supplied argument ($x = y.p(\vec{z})$ with $\top \notin \retParams(p)$), the Argument-Passthrough Filter inserts no edge. The caller already reaches the argument. Drawing a reverse return edge would introduce an artificial cycle ($m \rightleftarrows p$), falsely allowing paths to bypass $m$ and collapsing dominators to $\ROOT$ or $\GLOBAL$. Suppressing passthrough returns preserves topological acyclicity.
+\end{itemize}
 
 % ===================================================================
 \section{Algorithms}
@@ -1038,9 +1107,9 @@ To inspect the root causes of global heap escapes, \texttt{OwnershipTree.java} g
 
 To evaluate whether escapes stem from program semantics or static analysis conservatism, the toolchain generates \texttt{.ownwhatif} ablation files. This diagnostic pass evaluates three relaxed graph variants: Variant~S severs field edges originating from Spark synthetic special nodes; Variant~P models bodiless library natives as non-retaining; and Variant~SP applies both relaxations. Sites that transition from \HEAP{} to \OWN{} or \UP{} under Variant~SP quantify the exact volume of false escapes introduced by pointer analysis conservatism.
 
-\subsection{Micro-Corpus Verification Suite}
+\subsection{Verification Suite}
 
-A corpus of 20+ micro-benchmark programs verifies individual inference rules and edge cases:
+A suite of 20+ benchmark programs verifies individual inference rules and edge cases:
 \begin{itemize}
   \item \textbf{E-series} (E01--E11): Escape analysis edge cases (local containment, static escape, unavailable callees, escape by return, store into parameter, cycles, multi-reason attribution).
   \item \textbf{O-series} (O01--O09): Ownership-specific tests (frame tree, fluent borrow, merged container, move-out, recursion, thread handoff, library context, static scoped, static cross-frame).
@@ -1114,7 +1183,7 @@ Scoped Static Fields Share & 11.55\% & 13.58\% & 8.54\% & 5.45\% & 7.08\% & 2.81
 \end{tabular}
 \end{table}
 
-Across the suite, Static Scoping reclassifies \textbf{341 application allocation sites} from \HEAP{} to method-scoped \UP{} regions. The whole-program analysis partitions \textbf{22{,}971 allocation sites} into \textbf{11{,}119 active method regions} with \textbf{2{,}549 method-scoped static fields}.
+Across the suite, Static Scoping reclassifies \textbf{341 application allocation sites} from \HEAP{} to method-scoped \UP{} regions. The whole-program analysis partitions \textbf{22{,}971 allocation sites} (28.0\% of the 81{,}964 total whole-program sites) into \textbf{11{,}119 active method regions} with \textbf{2{,}549 method-scoped static fields}.
 
 \subsection{Physical Hardware Evaluation via OpenJ9 Debug Counters}
 
@@ -1144,7 +1213,7 @@ xalan   & 103 & 3.63\% & 137{,}599   & 165       & 51      & 0.12\% & 3.41  \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:hw-results} reports the dynamic allocation volume and object counts partitioned by DOSA across the six benchmarks under steady-state execution (\texttt{-n 5} iterations with four warmup runs). In total, DOSA instruments 746 active allocation sites (representing 3.70\% of the 20{,}143 candidate application allocation sites across the suite), diverting \textbf{1{,}179{,}574 dynamic objects} and \textbf{29.29~MB} of memory allocation entirely from the garbage-collected heap. Of these, 1{,}175{,}478 objects are stack-allocated within their allocating frames (\OWN{}). 
+Table~\ref{tab:hw-results} reports the dynamic allocation volume and object counts partitioned by DOSA across the six benchmarks under steady-state execution (\texttt{-n 5} iterations with four warmup runs). Across the evaluated workloads, total dynamic memory allocation reaches \textbf{7{,}630.99~MB (7.63~GB)} across \textbf{2{,}070{,}081 allocation events}. In total, DOSA instruments 746 active allocation sites (representing 3.70\% of the 20{,}143 candidate application allocation sites across the suite), diverting \textbf{1{,}179{,}574 dynamic objects} and \textbf{29.29~MB} of memory allocation entirely from the garbage-collected heap. Of these, 1{,}175{,}478 objects are stack-allocated within their allocating frames (\OWN{}). Across unconstrained allocation profiles, DOSA captures \textbf{526.95~MB} of dynamic memory churn into method arenas. 
 
 The inter-procedural method arena subsystem captures \textbf{4{,}096 dynamic objects}, where \textbf{3{,}786 objects} escape their allocating callees into ancestor controller frames (\UP{}). These allocations occur within controller regions selected because they bound method-scoped static fields (including \texttt{Main.startFOP} in \texttt{fop}, \texttt{PMD.processFile} in \texttt{pmd}, and \texttt{TestHarness.main} across the suite). While stack allocation accounts for the majority of short-lived objects, inter-procedural \UP{} objects represent the distinct fraction of allocations that escape local stack frames but are safely reclaimed at controller frame exits without invoking garbage collection. In benchmarks with deep call hierarchies such as \texttt{pmd} and \texttt{luindex}, \UP{} objects account for 1.97\% (3{,}017 objects) and 1.72\% (329 objects) of all objects diverted from the heap.
 
@@ -1329,7 +1398,7 @@ By Invariant 1 ($\mathcal{H}_{\text{GLOBAL}} \not\to \mathcal{A}_M$), objects in
 
 This thesis has presented DOSA (\textbf{D}ominator-guided \textbf{O}wnership for \textbf{S}tack \textbf{A}llocation), a comprehensive static ownership inference system that extends object lifetime bounding from intra-procedural escape analysis to inter-procedural method-scoped memory regions. Grounded in a semantics-first approach, we formulated the concrete dynamic ownership tree $T_t$, established the abstract ownership graph $G^\sharp$, and proved the soundness of frame-exit reclamation.
 
-Algorithmic innovations eliminate primary sources of static analysis imprecision: the Argument-Passthrough Filter prevents constructor chaining cycles via a 64-bit parameter derivation lattice $\mathcal{L}_{\text{ret}}$, while Static Scoping bounds global static fields to lowest common ancestor controller frames over the call graph SCC dominator tree. Across six DaCapo benchmarks, Static Scoping rescues 341 application allocation sites from \HEAP{} to method-scoped regions, partitioning 22{,}971 allocation sites and 2{,}549 static fields into 11{,}119 method regions.
+Algorithmic innovations eliminate primary sources of static analysis imprecision: the Argument-Passthrough Filter prevents constructor chaining cycles via a 64-bit parameter derivation lattice $\mathcal{L}_{\text{ret}}$, while Static Scoping bounds global static fields to lowest common ancestor controller frames over the call graph SCC dominator tree. Across six DaCapo benchmarks, Static Scoping rescues 341 application allocation sites from \HEAP{} to method-scoped regions, partitioning 22{,}971 allocation sites (28.0\% of 81{,}964 total whole-program sites) and 2{,}549 static fields into 11{,}119 method regions.
 
 Physical hardware execution on Eclipse OpenJ9 JDK~25 with Testarossa JIT debug counters confirms that DOSA diverts 1{,}179{,}574 dynamic objects (29.29~MB) from the garbage-collected heap under warmed steady-state conditions, including 3{,}786 inter-procedural \UP{} objects. Dynamic allocation profiling across 2.07 million events demonstrates that method arenas capture 526.95~MB of dynamic churn. In OpenJ9's default \texttt{gencon} collector, this diversion slows Eden fill rates, optimizes dynamic nursery tilting toward its 90\% ceiling, and extends minor GC intervals by up to 2.73$\times$ in \texttt{avrora} (eliminating 63.4\% of minor pauses). Scoping 2{,}549 static fields compresses temporary cache lifetimes by 85\% to 99\%, eliminating premature tenured promotion, avoiding free-list fragmentation, and stripping post-store card table write barriers. This work provides a rigorous mathematical foundation and architectural blueprint for integrating region-based memory management into production Java virtual machines.
 

@@ -3,7 +3,7 @@
 #
 #   tools/scripts/ownership/run_corpus.sh O01 O02 ...     programs by main class; default: every O, E, M
 #
-# Each program is compiled into build/<MAIN> the same way heapviz/build.sh does, then analysed
+# Each program is compiled into build/<MAIN> the same way DOSA/build.sh does, then analysed
 # twice (~45-60 s each, almost all of it Spark over the JDK). Output: build/own/<MAIN>/.
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/../../.." && pwd)"

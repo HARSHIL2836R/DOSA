@@ -1,4 +1,4 @@
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 python3 $H/tools/python/hidden_reason_check.py \
   --bench "avrora:/tmp/rv/p3out/avrora:avrora." \
   --bench "xalan:/tmp/rv/p3out/xalan:org.apache.xalan." \

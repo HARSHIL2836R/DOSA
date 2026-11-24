@@ -5,7 +5,7 @@ borrow-rule ablation.
     python3 tools/python/ownership/corpus_vs_stava.py
 
 Reads build/own/<MAIN>/<MAIN>.own and <MAIN>-id.own (tools/scripts/ownership/run_corpus.sh) and, for the
-programs Stava's corpus runs cover, build/out/<MAIN>-p6-false/graph.json (heapviz/build.sh, patch
+programs Stava's corpus runs cover, build/out/<MAIN>-p6-false/graph.json (DOSA/build.sh, patch
 0006, MarkStoreEscaping=false).
 
 Prints:

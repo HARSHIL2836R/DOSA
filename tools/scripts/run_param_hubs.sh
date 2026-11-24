@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_param_hubs.sh - tools/python/param_hubs.py on all seven patch-0005 runs (Param-Escape-Hubs-Report).
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 O=$H/build/out/param-hubs
 mkdir -p "$O"
 ph() {   # ph <name> <cfg> <prefix...>

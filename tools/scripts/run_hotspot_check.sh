@@ -2,7 +2,7 @@
 # run_hotspot_check.sh - which allocation sites C2 removes on each benchmark (tools/python/hotspot_elim.py).
 # DaCapo 9.12-MR1 on the same JDK Stava analysed with, 10 iterations so the hot code reaches C2.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 JAR=$H/../stava/benchmarks/dacapo/dacapo-9.12-MR1-bach.jar
 O=/tmp/rv/hotspot

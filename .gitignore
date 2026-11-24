@@ -22,3 +22,7 @@ latexmk_out/
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+
+*.nav
+*.snm
+*.vrb

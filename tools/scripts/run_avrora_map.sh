@@ -1,4 +1,4 @@
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 export JAVA_HOME=/home/harshil/jvm/jdk8u502-b07
 cd $H/extract
 python3 reason_source_map.py --info-dir /tmp/rv/p3out/avrora \

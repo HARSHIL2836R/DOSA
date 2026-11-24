@@ -6,7 +6,7 @@
 #   .reasons  columns 1-4 identical          (0004 only appends column 5, GROUP, and writes .via)
 # The patch-0003 outputs are reused from verify_patch3.sh (/tmp/rv/p3/<prog>-new) when present.
 set -u
-DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 JAVA_HOME_STAVA=/home/harshil/jvm/jdk8u502-b07
 SOOT=$DIR/../stava/soot/sootclasses-trunk-jar-with-dependencies.jar
 W=/tmp/rv/p4

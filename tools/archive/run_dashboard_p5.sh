@@ -8,7 +8,7 @@
 # Output: render/figures/<name>-p5-<cfg>-reason-*.{svg,dot}, <bench>-p5-<cfg>-explorer.html.
 # The patch-0004 figures are MOVED, not deleted, to render/figures/stale-pre-0005/.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 JDK="Temurin 8u502-b07"
 FIG=$H/render/figures

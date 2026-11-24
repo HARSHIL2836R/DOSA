@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_own_witness.sh - tools/python/own_witness.py on all seven patch-0005 runs.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 B=$H/../stava/benchmarks
 export JAVA_HOME=/home/harshil/jvm/jdk8u502-b07
 w() {   # w <name> <cfg> <classes dir> <prefix...>

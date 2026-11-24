@@ -2,7 +2,7 @@
 # run_capture_level.sh - tools/python/capture_level.py on every patch-0006 run, at the fork's cap of 2
 # and at 50, with the hoist candidates and hub sites from param_hubs.py reported separately.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 O=$H/build/out
 mkdir -p $O/capture-level
 cl() {   # cl <name> <cfg> <prefix...>

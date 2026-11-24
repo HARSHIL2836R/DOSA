@@ -8,7 +8,7 @@
 # Every reason figure and explorer built before patch 0004 is MOVED, not deleted, to
 # render/figures/stale-pre-0004/.
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 JDK="Temurin 8u502-b07"
 FIG=$H/render/figures

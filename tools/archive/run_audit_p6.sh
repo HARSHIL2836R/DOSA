@@ -2,7 +2,7 @@
 # run_audit_p6.sh - tools/python/viz_audit.py O5 on every patch-0006 reason figure set, in the unit they
 # are drawn in (application allocation sites, alias rule HEAPVIZ_ALIAS_REASONS, default own).
 set -u
-H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+H=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 export HEAPVIZ_REASON_MODE=roots
 au() {   # au <name> <cfg> <prefix...>
     local n="$1" c="$2"; shift 2

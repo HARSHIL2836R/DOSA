@@ -6,7 +6,7 @@
 #   .reasons  tools/python/compare_reasons_p4_p5.py: 7 columns, columns 1-4 identical, column-5
 #             pointer sets identical, own a subset of all
 set -u
-DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 JAVA_HOME_STAVA=/home/harshil/jvm/jdk8u502-b07
 SOOT=$DIR/../stava/soot/sootclasses-trunk-jar-with-dependencies.jar
 W=/tmp/rv/p5

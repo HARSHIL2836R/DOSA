@@ -9,7 +9,7 @@
 # Every run is checked against its earlier .res; copies go to /tmp/rv/p4info/<name>-<cfg> with the
 # .reasons AND the .via, which roots mode needs.
 set -u
-DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/heapviz
+DIR=/mnt/c/Users/Dell/Documents/IIT_academics/BTP/DOSA
 J=/home/harshil/jvm/jdk8u502-b07
 SOOT=$DIR/../stava/soot/sootclasses-trunk-jar-with-dependencies.jar
 CLS=$DIR/build/classes-reason4
